@@ -48,3 +48,10 @@ desktop.ini
 # Kaggle datasets
 notebooks/data/*.csv
 notebooks/output/US_Accidents_FL.csv
+
+
+# Windows / Google Drive
+desktop.ini
+Desktop.ini
+Thumbs.db
+.DS_Store
