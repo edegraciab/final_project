@@ -55,3 +55,11 @@ desktop.ini
 Desktop.ini
 Thumbs.db
 .DS_Store
+
+*.csv
+.openmeteo_cache/
+.openmeteo_cache_test/
+weather_checkpoint.csv
+*cache*
+
+smoke_test.py

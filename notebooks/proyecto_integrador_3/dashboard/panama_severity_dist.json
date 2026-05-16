@@ -1,0 +1,64 @@
+{
+  "global": {
+    "p_menor": 0.758,
+    "p_intermedio": 0.239,
+    "p_mayor": 0.003
+  },
+  "by_clase": {
+    "Atropello": {
+      "p_menor": 0.020099591430583263,
+      "p_intermedio": 0.9121386015878972,
+      "p_mayor": 0.06776180698151951
+    },
+    "Atropello y colisión": {
+      "p_menor": 0.0,
+      "p_intermedio": 0.75,
+      "p_mayor": 0.25
+    },
+    "Atropello y fuga": {
+      "p_menor": 0.24,
+      "p_intermedio": 0.36,
+      "p_mayor": 0.4
+    },
+    "Atropello y vuelco": {
+      "p_menor": 0.0,
+      "p_intermedio": 1.0,
+      "p_mayor": 0.0
+    },
+    "Caída de persona o cosa del vehículo en marcha": {
+      "p_menor": 0.6776315789473684,
+      "p_intermedio": 0.3223684210526316,
+      "p_mayor": 0.0
+    },
+    "Colisión": {
+      "p_menor": 0.7949802120502,
+      "p_intermedio": 0.20425639032142193,
+      "p_mayor": 0.0007633976283780345
+    },
+    "Colisión con objeto fijo": {
+      "p_menor": 0.7895114886643277,
+      "p_intermedio": 0.20565759346127616,
+      "p_mayor": 0.004830917874396135
+    },
+    "Colisión y atropello": {
+      "p_menor": 0.0,
+      "p_intermedio": 0.9545454545454546,
+      "p_mayor": 0.045454545454545456
+    },
+    "Colisión y vuelco": {
+      "p_menor": 0.0,
+      "p_intermedio": 0.9724137931034482,
+      "p_mayor": 0.027586206896551724
+    },
+    "Otras": {
+      "p_menor": 0.0,
+      "p_intermedio": 1.0,
+      "p_mayor": 0.0
+    },
+    "Vuelco": {
+      "p_menor": 0.12697599999999998,
+      "p_intermedio": 0.865024,
+      "p_mayor": 0.008
+    }
+  }
+}
