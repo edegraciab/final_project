@@ -48,7 +48,7 @@ desktop.ini
 # Kaggle datasets
 notebooks/data/*.csv
 notebooks/output/US_Accidents_FL.csv
-
+notebooks/proyecto_integrador_3/dashboard/accident_prediction_system.joblib
 
 # Windows / Google Drive
 desktop.ini

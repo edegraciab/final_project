@@ -175,12 +175,13 @@ div[data-testid="stTabs"] [role="tab"] {
 """, unsafe_allow_html=True)
 
 # ─── Paths ─────────────────────────────────────────────────────────────────
-_DASHBOARD_DIR = Path(__file__).parent
+_DASHBOARD_DIR   = Path(__file__).parent
+_OUTPUT_DATA_DIR = _DASHBOARD_DIR.parents[2] / "output" / "data"
 
 # ─── Data & model ──────────────────────────────────────────────────────────
 @st.cache_data
 def load_data():
-    df = pd.read_csv(_DASHBOARD_DIR / "panama_synthetic_accidents.csv")
+    df = pd.read_csv(_OUTPUT_DATA_DIR / "panama_synthetic_accidents.csv")
     df["Start_Time"] = pd.to_datetime(df["Start_Time"])
     df["wet_season"] = df["Month"].isin([5,6,7,8,9,10,11]).map({True:"Húmeda", False:"Seca"})
     bins = [0, 454, 648, 1969, 9999]
@@ -239,7 +240,7 @@ df = load_data()
 sistema = load_model()
 zones_df = zone_summary(df)
 
-with open(_DASHBOARD_DIR / "panama_severity_dist.json", encoding="utf-8") as _sev_f:
+with open(_OUTPUT_DATA_DIR / "panama_severity_dist.json", encoding="utf-8") as _sev_f:
     severity_dist = json.load(_sev_f)
 
 # ── Derived actuarial index ──────────────────────────────────────────

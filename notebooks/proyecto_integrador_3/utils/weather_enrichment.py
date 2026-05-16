@@ -32,12 +32,13 @@ Uso CLI (desde cualquier directorio):
 
     # O con rutas explícitas:
     python utils/weather_enrichment.py \\
-        --input  dashboard/panama_synthetic_accidents.csv \\
-        --output dashboard/panama_synthetic_accidents_weather.csv \\
-        [--checkpoint dashboard/weather_checkpoint.csv] \\
-        [--cache-dir  dashboard/.openmeteo_cache]
+        --input  notebooks/output/data/panama_synthetic_accidents.csv \\
+        --output notebooks/output/data/panama_synthetic_accidents_weather.csv \\
+        [--checkpoint utils/weather_checkpoint.csv] \\
+        [--cache-dir  utils/.openmeteo_cache]
 
-Nota: Los defaults apuntan automáticamente a ../dashboard/ relativo al script.
+Nota: Los defaults de --input y --output apuntan a notebooks/output/data/
+      relativo a la raíz del proyecto. El checkpoint y cache quedan en utils/.
 """
 
 from __future__ import annotations
@@ -48,10 +49,11 @@ import os
 import time
 from pathlib import Path
 
-# ── Rutas por defecto relativas al script ─────────────────────────────────────
-# El CSV vive en ../dashboard/ respecto a este script (utils/).
-_SCRIPT_DIR   = Path(__file__).resolve().parent
-_DASHBOARD_DIR = _SCRIPT_DIR.parent / "dashboard"
+# ── Rutas por defecto relativas al script ──────────────────────────────────────────
+# Las entradas/salidas de datos van a notebooks/output/data/
+# El checkpoint y el cache se mantienen en utils/ (archivos temporales).
+_SCRIPT_DIR    = Path(__file__).resolve().parent          # …/utils
+_OUTPUT_DATA   = _SCRIPT_DIR.parent.parent / "output" / "data"
 
 import numpy as np
 import pandas as pd
@@ -414,22 +416,22 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--input", "-i",
-        default=str(_DASHBOARD_DIR / "panama_synthetic_accidents.csv"),
+        default=str(_OUTPUT_DATA / "panama_synthetic_accidents.csv"),
         help="Ruta al CSV de entrada (default: %(default)s)",
     )
     p.add_argument(
         "--output", "-o",
-        default=str(_DASHBOARD_DIR / "panama_synthetic_accidents_weather.csv"),
+        default=str(_OUTPUT_DATA / "panama_synthetic_accidents_weather.csv"),
         help="Ruta del CSV de salida (default: %(default)s)",
     )
     p.add_argument(
         "--checkpoint", "-c",
-        default=str(_DASHBOARD_DIR / "weather_checkpoint.csv"),
+        default=str(_SCRIPT_DIR / "weather_checkpoint.csv"),
         help="CSV de checkpoint para reanudar si se interrumpe (default: %(default)s)",
     )
     p.add_argument(
         "--cache-dir",
-        default=str(_DASHBOARD_DIR / ".openmeteo_cache"),
+        default=str(_SCRIPT_DIR / ".openmeteo_cache"),
         help="Directorio para el cache HTTP (default: %(default)s)",
     )
     p.add_argument(
