@@ -798,43 +798,7 @@ with tab2:
 # TAB 3 — ANÁLISIS
 # ═══════════════════════════════════════════════════════════════════════════
 with tab3:
-    c1, c2 = st.columns(2, gap="medium")
-
-    with c1:
-        st.markdown("<div class='section-header'>Distribución horaria por severidad</div>", unsafe_allow_html=True)
-        fig_hour = px.histogram(df, x="Hour", color="MUTCD_Category",
-            barmode="overlay", opacity=0.75,
-            category_orders={"MUTCD_Category":["Menor","Intermedio","Mayor"]},
-            color_discrete_sequence=["#3498DB","#F39C12","#E74C3C"],
-            labels={"Hour":"Hora","count":"Accidentes"},
-            template="plotly_dark")
-        fig_hour.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
-            margin=dict(l=0,r=0,t=10,b=0), height=280, legend_title_text="",
-            legend=dict(orientation="h", y=1.05)
-        )
-        fig_hour.update_xaxes(showgrid=False)
-        fig_hour.update_yaxes(gridcolor="#252A38")
-        st.plotly_chart(fig_hour, width='stretch')
-
-    with c2:
-        st.markdown("<div class='section-header'>Severidad por estación climática</div>", unsafe_allow_html=True)
-        season_sev = df.groupby(["wet_season","MUTCD_Category"]).size().reset_index(name="n")
-        fig_season = px.bar(season_sev, x="wet_season", y="n", color="MUTCD_Category",
-            barmode="group",
-            category_orders={"MUTCD_Category":["Menor","Intermedio","Mayor"]},
-            color_discrete_sequence=["#3498DB","#F39C12","#E74C3C"],
-            labels={"wet_season":"Estación","n":"Accidentes","MUTCD_Category":"Severidad"},
-            template="plotly_dark")
-        fig_season.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
-            margin=dict(l=0,r=0,t=10,b=0), height=280, legend_title_text="",
-            legend=dict(orientation="h", y=1.05)
-        )
-        fig_season.update_xaxes(showgrid=False)
-        fig_season.update_yaxes(gridcolor="#252A38")
-        st.plotly_chart(fig_season, width='stretch')
-
+    # Synthetic charts moved below
     st.markdown("<div class='section-header'>Comparativo YoY por corregimiento — INEC 2023 vs 2024</div>", unsafe_allow_html=True)
     yoy_df = zones_df[["County","INEC_2023","INEC_2024","nivel"]].melt(
         id_vars=["County","nivel"], var_name="Año", value_name="Accidentes"
@@ -854,38 +818,7 @@ with tab3:
     fig_yoy.update_yaxes(gridcolor="#252A38")
     st.plotly_chart(fig_yoy, width='stretch')
 
-    c3, c4 = st.columns(2, gap="medium")
-    with c3:
-        st.markdown("<div class='section-header'>Precipitación vs severidad</div>", unsafe_allow_html=True)
-        fig_box = px.box(df, x="MUTCD_Category", y="Precipitation(in)",
-            color="MUTCD_Category",
-            category_orders={"MUTCD_Category":["Menor","Intermedio","Mayor"]},
-            color_discrete_sequence=["#3498DB","#F39C12","#E74C3C"],
-            template="plotly_dark")
-        fig_box.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
-            margin=dict(l=0,r=0,t=10,b=0), height=260, showlegend=False
-        )
-        fig_box.update_xaxes(showgrid=False)
-        fig_box.update_yaxes(gridcolor="#252A38")
-        st.plotly_chart(fig_box, width='stretch')
-
-    with c4:
-        st.markdown("<div class='section-header'>Nubosidad vs severidad</div>", unsafe_allow_html=True)
-        fig_vis = px.violin(df.sample(1000, random_state=42),
-            x="MUTCD_Category", y="Cloud_Cover(%)",
-            color="MUTCD_Category",
-            category_orders={"MUTCD_Category":["Menor","Intermedio","Mayor"]},
-            color_discrete_sequence=["#3498DB","#F39C12","#E74C3C"],
-            template="plotly_dark", box=True)
-        fig_vis.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
-            margin=dict(l=0,r=0,t=10,b=0), height=260, showlegend=False
-        )
-        fig_vis.update_xaxes(showgrid=False)
-        fig_vis.update_yaxes(gridcolor="#252A38")
-        st.plotly_chart(fig_vis, width='stretch')
-
+    # Synthetic charts moved below
     # ── Domain shift: mortalidad por tipo y picos estacionales ─────────────
     st.markdown("<div class='section-header' style='margin-top:28px'>Mortalidad por tipo de accidente · Picos estacionales — INEC Real Panamá</div>", unsafe_allow_html=True)
 
@@ -1024,6 +957,81 @@ with tab3:
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # ── Distribuciones Calibradas ─────────────────────────────────────────
+    st.markdown("<div class='section-header' style='margin-top:28px'>Distribución horaria y estacional — Calibradas con INEC Panamá</div>", unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2, gap="medium")
+
+    with c1:
+        st.markdown("<div class='section-header'>Distribución horaria por severidad</div>", unsafe_allow_html=True)
+        fig_hour = px.histogram(df, x="Hour", color="MUTCD_Category",
+            barmode="overlay", opacity=0.75,
+            category_orders={"MUTCD_Category":["Menor","Intermedio","Mayor"]},
+            color_discrete_sequence=["#3498DB","#F39C12","#E74C3C"],
+            labels={"Hour":"Hora","count":"Accidentes"},
+            template="plotly_dark")
+        fig_hour.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
+            margin=dict(l=0,r=0,t=10,b=0), height=280, legend_title_text="",
+            legend=dict(orientation="h", y=1.05)
+        )
+        fig_hour.update_xaxes(showgrid=False)
+        fig_hour.update_yaxes(gridcolor="#252A38")
+        st.plotly_chart(fig_hour, width='stretch')
+
+    with c2:
+        st.markdown("<div class='section-header'>Severidad por estación climática</div>", unsafe_allow_html=True)
+        season_sev = df.groupby(["wet_season","MUTCD_Category"]).size().reset_index(name="n")
+        fig_season = px.bar(season_sev, x="wet_season", y="n", color="MUTCD_Category",
+            barmode="group",
+            category_orders={"MUTCD_Category":["Menor","Intermedio","Mayor"]},
+            color_discrete_sequence=["#3498DB","#F39C12","#E74C3C"],
+            labels={"wet_season":"Estación","n":"Accidentes","MUTCD_Category":"Severidad"},
+            template="plotly_dark")
+        fig_season.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
+            margin=dict(l=0,r=0,t=10,b=0), height=280, legend_title_text="",
+            legend=dict(orientation="h", y=1.05)
+        )
+        fig_season.update_xaxes(showgrid=False)
+        fig_season.update_yaxes(gridcolor="#252A38")
+        st.plotly_chart(fig_season, width='stretch')
+
+    # ── Datos Sintéticos ───────────────────────────────────────────────────
+    st.markdown("<div class='section-header' style='margin-top:28px'>Variables físicas simuladas (Clima ERA5) — Relaciones Sintéticas</div>", unsafe_allow_html=True)
+
+    c3, c4 = st.columns(2, gap="medium")
+    with c3:
+        st.markdown("<div class='section-header'>Precipitación vs severidad</div>", unsafe_allow_html=True)
+        fig_box = px.box(df, x="MUTCD_Category", y="Precipitation(in)",
+            color="MUTCD_Category",
+            category_orders={"MUTCD_Category":["Menor","Intermedio","Mayor"]},
+            color_discrete_sequence=["#3498DB","#F39C12","#E74C3C"],
+            template="plotly_dark")
+        fig_box.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
+            margin=dict(l=0,r=0,t=10,b=0), height=260, showlegend=False
+        )
+        fig_box.update_xaxes(showgrid=False)
+        fig_box.update_yaxes(gridcolor="#252A38")
+        st.plotly_chart(fig_box, width='stretch')
+
+    with c4:
+        st.markdown("<div class='section-header'>Nubosidad vs severidad</div>", unsafe_allow_html=True)
+        fig_vis = px.violin(df.sample(1000, random_state=42),
+            x="MUTCD_Category", y="Cloud_Cover(%)",
+            color="MUTCD_Category",
+            category_orders={"MUTCD_Category":["Menor","Intermedio","Mayor"]},
+            color_discrete_sequence=["#3498DB","#F39C12","#E74C3C"],
+            template="plotly_dark", box=True)
+        fig_vis.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
+            margin=dict(l=0,r=0,t=10,b=0), height=260, showlegend=False
+        )
+        fig_vis.update_xaxes(showgrid=False)
+        fig_vis.update_yaxes(gridcolor="#252A38")
+        st.plotly_chart(fig_vis, width='stretch')
 
 
 # ═══════════════════════════════════════════════════════════════════════════
