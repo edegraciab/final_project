@@ -112,8 +112,8 @@ El notebook central del proyecto. Integra análisis avanzado y modelado en un fl
 - Patrones temporales: hora, día, mes, estación del año
 - Impacto de condiciones climáticas: temperatura, humedad, visibilidad
 - Análisis de infraestructura vial: semáforos, intersecciones, cruces ferroviarios
-- **Modelo de Ocurrencia**: Probabilidad de accidente por zona (Poisson)
-- **Modelo de Severidad**: Clasificación `Menor / Intermedio / Mayor` (MUTCD)
+- **Etapa 1 — Ocurrencia**: Análisis descriptivo de distribución de accidentes por zona geográfica (nivel Bajo / Moderado / Alto / Crítico por conteos)
+- **Etapa 2 — Severidad**: Clasificación `Low / Moderate / High` con Random Forest, Extra Trees y XGBoost (validación cruzada 5-fold + comparación de modelos)
 - Visualizaciones interactivas con Plotly
 
 ### Variables Clave
@@ -124,7 +124,7 @@ El notebook central del proyecto. Integra análisis avanzado y modelado en un fl
 | Temporales | Hour, DayOfWeek, Month, wet_season |
 | Climatológicas | Weather_Condition, Temperature(F), Humidity(%), Visibility(mi), Precipitation(in) |
 | Infraestructura | Traffic_Signal, Junction, Crossing, Roundabout, Amenity |
-| Variable Objetivo | Severity → `Menor` / `Intermedio` / `Mayor` (MUTCD) |
+| Variable Objetivo | Severity → `Low` / `Moderate` / `High` (reagrupación de Severity 1–4) |
 
 ---
 
@@ -148,14 +148,69 @@ Módulo de enriquecimiento meteorológico que consume la API **Open-Meteo** para
 - Genera `notebooks/output/data/panama_synthetic_accidents_weather.csv` como output del pipeline
 
 #### [`dashboard/app.py`](notebooks/proyecto_integrador_3/dashboard/app.py)
-Aplicación Streamlit principal con cuatro pestañas:
+Aplicación Streamlit principal con cinco pestañas:
 
 | Pestaña | Contenido |
 |---------|-----------|
-| Predictor | Predicción en tiempo real (severidad MUTCD + probabilidades calibradas INEC + índice de prima técnica relativa) |
 | Mapa de Riesgo | Mapa de calor a nivel de corregimiento con datos INEC 2024 |
-| Análisis | Distribución horaria, estacional, YoY INEC 2023 vs 2024, precipitación y visibilidad |
-| Actuarial | Tabla de primas técnicas por corregimiento + scatter de índice de prima |
+| Perfil de Siniestralidad | Distribución horaria, estacional, YoY INEC 2023 vs 2024 |
+| EDA · Florida | Análisis exploratorio del dataset de entrenamiento (FL): severidad, patrones temporales, clima e infraestructura que motivaron las features del modelo |
+| Predictor | Predicción en tiempo real (severidad MUTCD + probabilidades calibradas INEC + índice de prima técnica relativa) |
+| Actuarial | Tabla y scatter de índice de prima técnica relativa por corregimiento (ver detalle abajo) |
+
+#### Pestaña Actuarial — detalle de cálculos
+
+La pestaña presenta dos vistas complementarias para la tarificación por corregimiento:
+
+**Tabla de primas técnicas**  
+Cada fila es un corregimiento ordenado de mayor a menor índice de prima. Las columnas son:
+
+| Columna | Descripción |
+|---------|-------------|
+| INEC 2024 | Conteo real de accidentes según el Instituto Nacional de Estadística y Censo |
+| YoY | Crecimiento interanual 2023→2024; un valor positivo encarece la prima |
+| P(Mayor) | Probabilidad de que un accidente sea clasificado como Mayor (severidad alta) según el modelo Random Forest |
+| Peso INEC | Factor de escala = INEC_2024 / media_distrital; normaliza la exposición de cada corregimiento respecto al promedio del Distrito |
+| Índice Prima | Índice relativo de prima técnica (ver fórmula abajo) |
+
+**Fórmula del índice de prima relativa:**
+
+```
+índice_prima(zona) = ( INEC_weight(zona) × P(Mayor|zona) × (1 + YoY(zona)) )
+                     ────────────────────────────────────────────────────────
+                          min( mismo producto sobre todas las zonas )
+```
+
+El índice es adimensional y relativo: la zona de menor riesgo compuesto vale `1.00×`; las demás se expresan como múltiplo de esa base. Un índice de `3.5×` significa que esa zona tiene una exposición actuarial 3.5 veces mayor que la de menor riesgo.
+
+**Ejemplo de cálculo manual (3 zonas ilustrativas):**
+
+| Corregimiento | INEC 2024 | Peso INEC | P(Mayor) | YoY | Producto crudo |
+|---|---|---|---|---|---|
+| Bella Vista | 2,881 | 3.10 | 18.5% | +8.2% | 3.10 × 0.185 × 1.082 = **0.6200** |
+| Betania | 1,240 | 1.33 | 14.1% | +5.0% | 1.33 × 0.141 × 1.050 = **0.1970** |
+| Chilibre | 180 | 0.19 | 11.8% | +1.1% | 0.19 × 0.118 × 1.011 = **0.0227** |
+
+El mínimo del producto crudo entre todas las zonas es el de Chilibre: `0.0227`.
+
+```
+índice_prima(Bella Vista) = 0.6200 / 0.0227 = 27.3×
+índice_prima(Betania)     = 0.1970 / 0.0227 =  8.7×
+índice_prima(Chilibre)    = 0.0227 / 0.0227 =  1.0×  ← base
+```
+
+Interpretación: asegurar un vehículo en Bella Vista debería costar ~27 veces más que en Chilibre, y ~3 veces más que en Betania, considerando únicamente frecuencia observada, severidad modelada y tendencia de crecimiento. Los valores anteriores son ilustrativos; los índices reales se calculan sobre los 25 corregimientos del Distrito y aparecen en la tabla del dashboard.
+
+**Scatter de índice de prima**  
+Eje X = accidentes INEC 2024 (frecuencia observada), eje Y = P(Mayor) del modelo (severidad condicional), tamaño del punto = índice de prima. Permite identificar visualmente tres perfiles de riesgo:
+- **Alta frecuencia + alta severidad** → prima más cara (punto grande, arriba a la derecha)
+- **Alta frecuencia + baja severidad** → volumen sin mortalidad (punto chico, abajo a la derecha)
+- **Baja frecuencia + alta severidad** → riesgo catastrófico puntual (punto grande, arriba a la izquierda)
+
+**Conexión con el modelo de dos etapas:**  
+La prima técnica completa requeriría `E[Frecuencia] × P(Mayor) × E[Costo siniestro] × (1 + loading)`. El índice usa `E[Frecuencia]` aproximado por el peso INEC (datos reales), `P(Mayor)` del Random Forest calibrado, y el factor YoY como proxy del loading de tendencia. El término `E[Costo siniestro]` está pendiente de datos reales de liquidación (fuente sugerida: FEDPA).
+
+---
 
 #### [`dashboard/model.py`](notebooks/proyecto_integrador_3/dashboard/model.py)
 Definición standalone de `AccidentPredictionSystem` — necesaria para deserializar el modelo `.joblib` fuera del entorno de entrenamiento (Colab).
@@ -174,7 +229,7 @@ Tests de humo para validar que el pipeline de carga del modelo y las prediccione
 | Base del modelo | Florida Accidents Dataset (US_Accidents_FL.csv) |
 | Open-Meteo API | Datos meteorológicos históricos para enriquecimiento del dataset |
 
-### Micro-segmentación de Riesgo (Capa 5)
+### Micro-segmentación de Riesgo
 
 El modelo integra una capa de micro-segmentación tarifaria a nivel de vía y tipo de carretera (`Road_Type`), calculada a partir de estadísticas del INEC:
 - Permite pasar de un análisis macro por corregimiento a un riesgo específico por ruta.
