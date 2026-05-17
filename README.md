@@ -169,9 +169,17 @@ Tests de humo para validar que el pipeline de carga del modelo y las prediccione
 |--------|---------|
 | INEC 2024 | 23,235 accidentes / 25 corregimientos / Distrito de Panamá |
 | INEC 2023 | 21,801 accidentes (YoY +6.6%) |
+| INEC Vías | Distribución de riesgo por vía (micro-segmentación) y tipo de carretera |
 | FEDPA | 517 reclamos reales deidentificados (broker panameño) |
 | Base del modelo | Florida Accidents Dataset (US_Accidents_FL.csv) |
 | Open-Meteo API | Datos meteorológicos históricos para enriquecimiento del dataset |
+
+### Micro-segmentación de Riesgo (Capa 5)
+
+El modelo integra una capa de micro-segmentación tarifaria a nivel de vía y tipo de carretera (`Road_Type`), calculada a partir de estadísticas del INEC:
+- Permite pasar de un análisis macro por corregimiento a un riesgo específico por ruta.
+- Cuantifica y visualiza vías críticas con mayor `P(Mayor)` (`highway`: 0.85%, `street`: 0.79%, `avenue`: 0.41%).
+- Introduce factores de recargo actuariales para el cálculo final de la prima técnica automotriz.
 
 ### Ejecutar el Dashboard
 

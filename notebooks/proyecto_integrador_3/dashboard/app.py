@@ -181,8 +181,46 @@ div[data-testid="stTabs"] [role="tab"] {
 # ─── Paths ─────────────────────────────────────────────────────────────────
 _DASHBOARD_DIR   = Path(__file__).parent
 _OUTPUT_DATA_DIR = _DASHBOARD_DIR.parents[1] / "output" / "data"
+_FL_CSV_PATH     = _DASHBOARD_DIR.parents[1] / "data" / "US_Accidents_FL.csv"
 
 # ─── Data & model ──────────────────────────────────────────────────────────
+@st.cache_data
+def load_fl_data(n: int = 60_000):
+    """Carga una muestra estratificada del dataset de Florida para EDA. Si n=None, carga toda la data."""
+    fl = pd.read_csv(_FL_CSV_PATH, parse_dates=["Start_Time", "End_Time"])
+    fl["Start_Time"] = pd.to_datetime(fl["Start_Time"], errors="coerce")
+    fl["End_Time"]   = pd.to_datetime(fl["End_Time"], errors="coerce")
+    
+    # Calcular duración real en minutos
+    fl["Duration_min"] = (fl["End_Time"] - fl["Start_Time"]).dt.total_seconds() / 60.0
+    
+    # Clasificación MUTCD por tiempo real (FHWA)
+    def clasificar_mutcd(duracion):
+        if pd.isna(duracion) or duracion < 30:
+            return "Menor"
+        elif duracion <= 120:
+            return "Intermedio"
+        else:
+            return "Mayor"
+            
+    fl["MUTCD"] = fl["Duration_min"].apply(clasificar_mutcd)
+    
+    if n is None or n >= len(fl):
+        fl_sample = fl.copy()
+    else:
+        # Muestra estratificada por MUTCD
+        fl_sample = (
+            fl.groupby("MUTCD", group_keys=False)
+            .apply(lambda g: g.sample(min(len(g), int(n * len(g) / len(fl))), random_state=42))
+        ).reset_index(drop=True)
+        
+    fl_sample["Hour"]      = fl_sample["Start_Time"].dt.hour
+    fl_sample["DayOfWeek"] = fl_sample["Start_Time"].dt.dayofweek
+    fl_sample["Month"]     = fl_sample["Start_Time"].dt.month
+    fl_sample["Year"]      = fl_sample["Start_Time"].dt.year
+    
+    return fl, fl_sample
+
 @st.cache_data
 def load_data():
     df = pd.read_csv(_OUTPUT_DATA_DIR / "panama_synthetic_accidents_weather.csv")
@@ -192,6 +230,11 @@ def load_data():
     labels = ["Bajo","Moderado","Alto","Crítico"]
     df["nivel_riesgo"] = pd.cut(df["INEC_2024"], bins=bins, labels=labels)
     return df
+
+@st.cache_data
+def load_road_dist():
+    with open(_OUTPUT_DATA_DIR / "inec_road_dist.json", "r", encoding="utf-8") as f:
+        return json.load(f)
 
 @st.cache_resource
 def load_climatology():
@@ -264,17 +307,7 @@ clim_loaded = False  # se carga lazy al primer predict
 with open(_OUTPUT_DATA_DIR / "panama_severity_dist.json", encoding="utf-8") as _sev_f:
     severity_dist = json.load(_sev_f)
 
-# ── Derived actuarial index ──────────────────────────────────────────
-zones_df["prima_index"] = (
-    zones_df["INEC_weight"] * zones_df["p_mayor"] * (1 + zones_df["YoY"])
-)
-_idx_min = zones_df["prima_index"].replace(0, np.nan).min()
-zones_df["prima_index"] = (
-    (zones_df["prima_index"] / _idx_min)
-    .fillna(1.0)
-    .clip(lower=0.01)
-    .round(2)
-)
+# (Static actuarial index removed - moved to dynamic loop)
 
 RISK_COLORS = {"Crítico":"#E74C3C","Alto":"#F39C12","Moderado":"#2ECC71","Bajo":"#3498DB"}
 
@@ -407,27 +440,57 @@ result = sistema.predict_severity(input_row)
 #st.stop()  # detiene la ejecución aquí
 probs  = result[["prob_Menor","prob_Intermedio","prob_Mayor"]].values[0]
 
-# ── Etapa 1: Frecuencia esperada (Poisson) ─────────────────────────
-zone_df_poisson = pd.DataFrame([{
-    "County":          corregimiento,
-    "Hour":            hora,
-    "Month":           mes,
-    "temp_mean":       wx["temperature_f"],
-    "humidity_mean":   wx["humidity_pct"],
-    "visibility_mean": wx.get("visibility_mi", 7.0),
-    "rain_mean":       wx["precip_in"],
-}])
+# ── Etapa 1: Frecuencia esperada (Poisson) Dinámica ─────────────────────────
+# Generamos el dataset Poisson para TODAS las zonas
+poisson_rows = []
+for c in zones_df["County"]:
+    poisson_rows.append({
+        "County":          c,
+        "Hour":            hora,
+        "Month":           mes,
+        "temp_mean":       wx["temperature_f"],
+        "humidity_mean":   wx["humidity_pct"],
+        "visibility_mean": wx.get("visibility_mi", 7.0),
+        "rain_mean":       wx["precip_in"],
+    })
+all_zones_poisson = pd.DataFrame(poisson_rows)
+
+zones_dynamic = zones_df.copy()
 
 try:
-    freq_pred = float(sistema.predict_frequency(zone_df_poisson)[0])
-    freq_pred = max(0.0, round(freq_pred, 2))
+    freq_preds = sistema.predict_frequency(all_zones_poisson)
+    zones_dynamic["freq_pred_dyn"] = np.maximum(0.0, np.round(freq_preds, 4))
 except Exception:
-    # Fallback: estimación desde INEC si Poisson falla
-    freq_pred = round(float(zone_row["INEC_2024"]) / 8760, 2)  # acc/hora anual
+    zones_dynamic["freq_pred_dyn"] = (zones_dynamic["INEC_2024"] / 8760).round(4)
 
-# Calibrar con peso INEC
-mean_w  = zones_df["INEC_weight"].mean()
-cal_fac = zone_row["INEC_weight"] / mean_w
+freq_pred = float(zones_dynamic.loc[zones_dynamic["County"] == corregimiento, "freq_pred_dyn"].values[0])
+
+# ── Índice Actuarial Dinámico ──────────────────────────────────────────
+zones_dynamic["prima_index_dyn"] = (
+    zones_dynamic["freq_pred_dyn"] * zones_dynamic["p_mayor"] * (1 + zones_dynamic["YoY"])
+)
+_idx_min = zones_dynamic["prima_index_dyn"].replace(0, np.nan).min()
+zones_dynamic["prima_index_dyn"] = (
+    (zones_dynamic["prima_index_dyn"] / max(_idx_min, 0.0001))
+    .fillna(1.0)
+    .clip(lower=0.01)
+    .round(2)
+)
+
+def calc_nivel_dinamico(pi):
+    if pi >= 5: return "Crítico"
+    elif pi >= 2: return "Alto"
+    elif pi >= 1: return "Moderado"
+    else: return "Bajo"
+    
+zones_dynamic["nivel_dyn"] = zones_dynamic["prima_index_dyn"].apply(calc_nivel_dinamico)
+
+# Fila del corregimiento seleccionado en el dataframe dinámico
+zone_row_dyn = zones_dynamic[zones_dynamic["County"] == corregimiento].iloc[0]
+
+# Calibrar probabilidad Mayor (Predictor local) usando la Frecuencia Dinámica
+mean_f  = zones_dynamic["freq_pred_dyn"].mean()
+cal_fac = (freq_pred / max(mean_f, 0.0001)) if mean_f > 0 else 1.0
 prob_m  = min(probs[0], 1.0)
 prob_i  = min(probs[1], 1.0)
 prob_ma = min(probs[2] * cal_fac, 1.0)
@@ -479,12 +542,18 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ── Tabs ──
-tab1, tab2, tab3, tab4 = st.tabs(["🎯  Predictor", "🗺️  Mapa de Riesgo", "📊  Análisis", "💰  Actuarial"])
+tab_eda_fl, tab_mapa, tab_perfil, tab_predictor, tab_actuarial = st.tabs([
+    "🔍  EDA · Florida",
+    "🗺️  Mapa de Riesgo",
+    "📊  Perfil de Siniestralidad",
+    "🎯  Predictor",
+    "💰  Actuarial"
+])
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TAB 1 — PREDICTOR
 # ═══════════════════════════════════════════════════════════════════════════
-with tab1:
+with tab_predictor:
     col_pred, col_ctx = st.columns([1, 1.6], gap="large")
 
     with col_pred:
@@ -585,8 +654,8 @@ with tab1:
         </div>
         """, unsafe_allow_html=True)
 
-        prima_idx = float(zone_row["prima_index"])
-        yoy_pct   = float(zone_row["YoY"]) * 100
+        prima_idx = float(zone_row_dyn["prima_index_dyn"])
+        yoy_pct   = float(zone_row_dyn["YoY"]) * 100
         st.markdown(f"""
         <div class='pred-card' style='margin-top:12px;background:#13161D'>
           <div class='pred-label'>Índice de prima técnica relativa</div>
@@ -729,7 +798,7 @@ with tab1:
 # ═══════════════════════════════════════════════════════════════════════════
 # TAB 2 — MAPA DE RIESGO
 # ═══════════════════════════════════════════════════════════════════════════
-with tab2:
+with tab_mapa:
     col_map, col_legend = st.columns([2.5, 1])
 
     with col_map:
@@ -737,10 +806,10 @@ with tab2:
 
         m2 = folium.Map(location=[9.02, -79.52], zoom_start=11, tiles="CartoDB dark_matter")
 
-        for _, row in zones_df.iterrows():
-            nivel = str(row["nivel"])
+        for _, row in zones_dynamic.iterrows():
+            nivel = str(row["nivel_dyn"])
             color = RISK_COLORS.get(nivel, "#3498DB")
-            radius = int(row["INEC_2024"] / 2881 * 40) + 8
+            radius = min(40, int(row["freq_pred_dyn"] * 50) + 8)
             yoy_pct = row["YoY"] * 100
 
             folium.CircleMarker(
@@ -754,7 +823,8 @@ with tab2:
                     INEC 2024: <b>{int(row['INEC_2024']):,}</b><br>
                     Crec. YoY: <b>{yoy_pct:+.1f}%</b><br>
                     P(Mayor): <b>{row['p_mayor']*100:.1f}%</b><br>
-                    Prima index: <b>{row['prima_index']:.2f}×</b>
+                    E[Freq] Poisson: <b>{row['freq_pred_dyn']:.3f}</b><br>
+                    Prima index: <b>{row['prima_index_dyn']:.2f}×</b>
                     </div>""",
                     max_width=200
                 ),
@@ -764,9 +834,9 @@ with tab2:
         st_folium(m2, height=520, width='stretch')
 
     with col_legend:
-        st.markdown("<div class='section-header'>Leyenda INEC 2024</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-header'>Leyenda Dinámica</div>", unsafe_allow_html=True)
         for nivel, color in RISK_COLORS.items():
-            cnt = zones_df[zones_df["nivel"].astype(str) == nivel]["County"].count()
+            cnt = zones_dynamic[zones_dynamic["nivel_dyn"].astype(str) == nivel]["County"].count()
             rng_map = {"Crítico":"1,970–2,881","Alto":"649–1,969","Moderado":"455–648","Bajo":"36–454"}
             st.markdown(f"""
             <div style='display:flex;align-items:center;gap:10px;margin-bottom:12px'>
@@ -778,10 +848,10 @@ with tab2:
             </div>
             """, unsafe_allow_html=True)
 
-        st.markdown("<div class='section-header' style='margin-top:24px'>Top 5 zonas</div>", unsafe_allow_html=True)
-        top5 = zones_df.nlargest(5, "INEC_2024")
+        st.markdown("<div class='section-header' style='margin-top:24px'>Top 5 Zonas (Riesgo Actual)</div>", unsafe_allow_html=True)
+        top5 = zones_dynamic.nlargest(5, "prima_index_dyn")
         for _, r in top5.iterrows():
-            nv = str(r["nivel"])
+            nv = str(r["nivel_dyn"])
             c  = RISK_COLORS.get(nv, "#3498DB")
             st.markdown(f"""
             <div style='display:flex;justify-content:space-between;align-items:center;
@@ -790,14 +860,14 @@ with tab2:
                 <div style='font-weight:500'>{r['County']}</div>
                 <div style='font-size:10px;color:#7A8499'>YoY {r['YoY']*100:+.1f}%</div>
               </div>
-              <div style='font-family:Syne,sans-serif;font-weight:700;color:{c}'>{int(r['INEC_2024']):,}</div>
+              <div style='font-family:Syne,sans-serif;font-weight:700;color:{c}'>{r['prima_index_dyn']:.2f}×</div>
             </div>
             """, unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TAB 3 — ANÁLISIS
 # ═══════════════════════════════════════════════════════════════════════════
-with tab3:
+with tab_perfil:
     # Synthetic charts moved below
     st.markdown("<div class='section-header'>Comparativo YoY por corregimiento — INEC 2023 vs 2024</div>", unsafe_allow_html=True)
     yoy_df = zones_df[["County","INEC_2023","INEC_2024","nivel"]].melt(
@@ -817,6 +887,76 @@ with tab3:
     fig_yoy.update_xaxes(showgrid=False)
     fig_yoy.update_yaxes(gridcolor="#252A38")
     st.plotly_chart(fig_yoy, width='stretch')
+
+    # ── Concentración de Riesgo por Vía (Micro-segmentación) ─────────────
+    st.markdown("<div class='section-header' style='margin-top:28px'>Concentración de Riesgo por Vía (Micro-segmentación)</div>", unsafe_allow_html=True)
+    
+    road_dist = load_road_dist()
+    zone_vias = road_dist.get("zone_vias", {})
+    
+    available_counties = sorted([c for c in zones_df["County"].unique() if c in zone_vias])
+    
+    if available_counties:
+        default_idx = available_counties.index("Ancón") if "Ancón" in available_counties else 0
+        selected_county = st.selectbox("Seleccionar Corregimiento", available_counties, index=default_idx, key="road_dist_county")
+        
+        county_vias = zone_vias[selected_county]
+        county_total = zones_df.loc[zones_df["County"] == selected_county, "INEC_2024"].values[0]
+        
+        _vias_df = pd.DataFrame({
+            "Vía": county_vias["vias"],
+            "Probabilidad": county_vias["probs"],
+            "Tipo": county_vias["road_types"]
+        })
+        _vias_df["Accidentes_Estimados"] = (_vias_df["Probabilidad"] * county_total).round().astype(int)
+        
+        _vias_df = _vias_df.sort_values("Accidentes_Estimados", ascending=False).head(10)
+        _vias_df = _vias_df.iloc[::-1]
+        
+        fig_roads = px.bar(_vias_df, x="Accidentes_Estimados", y="Vía", orientation="h",
+                           text="Accidentes_Estimados",
+                           color="Accidentes_Estimados", color_continuous_scale="Reds",
+                           template="plotly_dark")
+        fig_roads.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
+            margin=dict(l=0,r=0,t=10,b=10), height=350,
+            xaxis_title="Accidentes Estimados (INEC 2024)", yaxis_title="",
+            showlegend=False, coloraxis_showscale=False
+        )
+        fig_roads.update_xaxes(showgrid=False)
+        fig_roads.update_yaxes(gridcolor="#252A38")
+        
+        st.plotly_chart(fig_roads, width="stretch")
+        
+        top_via = _vias_df.iloc[-1]
+        st.markdown(f"""
+        <div style='font-size:13px;color:#7A8499;margin-top:-10px;margin-bottom:20px'>
+            <b>Insight de micro-segmentación:</b> La vía más crítica en {selected_county} es <b>{top_via['Vía']}</b>, 
+            concentrando el <b>{top_via['Probabilidad']*100:.1f}%</b> del riesgo total del corregimiento ({top_via['Accidentes_Estimados']} siniestros estimados en 2024).
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<div class='section-header' style='margin-top:28px'>Severidad Actuarial por Tipo de Vía (Road_Type)</div>", unsafe_allow_html=True)
+        
+        _rt_df = df.groupby("Road_Type").apply(lambda x: pd.Series({
+            "total": len(x),
+            "p_mayor": (x["MUTCD_Category"]=="Mayor").mean() * 100
+        }), include_groups=False).reset_index()
+        _rt_df = _rt_df[_rt_df["total"] > 10].sort_values("p_mayor", ascending=True)
+        
+        fig_rt = px.bar(_rt_df, x="p_mayor", y="Road_Type", orientation="h",
+                        text=_rt_df["p_mayor"].apply(lambda x: f"{x:.2f}%" if x > 0 else "&lt; 0.01%"),
+                        color="p_mayor", color_continuous_scale="Reds",
+                        template="plotly_dark")
+        fig_rt.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
+            margin=dict(l=0,r=0,t=10,b=10), height=250,
+            xaxis_title="P(Mayor) %", yaxis_title="",
+            showlegend=False, coloraxis_showscale=False
+        )
+        fig_rt.update_xaxes(showgrid=False)
+        fig_rt.update_yaxes(gridcolor="#252A38")
+        st.plotly_chart(fig_rt, width="stretch")
 
     # Synthetic charts moved below
     # ── Domain shift: mortalidad por tipo y picos estacionales ─────────────
@@ -998,84 +1138,326 @@ with tab3:
         fig_season.update_yaxes(gridcolor="#252A38")
         st.plotly_chart(fig_season, width='stretch')
 
-    # ── Datos Sintéticos ───────────────────────────────────────────────────
-    st.markdown("<div class='section-header' style='margin-top:28px'>Variables físicas simuladas (Clima ERA5) — Relaciones Sintéticas</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-header' style='margin-top:28px'>Mapa de Calor: Probabilidad Conjunta (Día × Hora) — INEC Panamá</div>", unsafe_allow_html=True)
+    
+    _joint_df = pd.read_csv(_OUTPUT_DATA_DIR / "inec_hour_dow_joint.csv")
+    _dow_map = {0:"Lunes",1:"Martes",2:"Miércoles",3:"Jueves",4:"Viernes",5:"Sábado",6:"Domingo"}
+    _joint_df["Día"] = _joint_df["dow"].map(_dow_map)
+    _joint_df["Probabilidad (%)"] = _joint_df["prob"] * 100
+    
+    _hm_data = _joint_df.pivot(index="Día", columns="hour", values="Probabilidad (%)")
+    _hm_data = _hm_data.reindex(["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"])
+    
+    fig_hm = px.imshow(_hm_data, 
+                       labels=dict(x="Hora del día", y="Día de la semana", color="Prob (%)"),
+                       x=_hm_data.columns, y=_hm_data.index,
+                       color_continuous_scale="Reds",
+                       aspect="auto",
+                       template="plotly_dark")
+    fig_hm.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
+        margin=dict(l=0,r=0,t=10,b=0), height=280
+    )
+    fig_hm.update_xaxes(tickmode='linear', dtick=1, showgrid=False)
+    fig_hm.update_yaxes(showgrid=False)
+    st.plotly_chart(fig_hm, width='stretch')
 
-    c3, c4 = st.columns(2, gap="medium")
-    with c3:
-        st.markdown("<div class='section-header'>Precipitación vs severidad</div>", unsafe_allow_html=True)
-        fig_box = px.box(df, x="MUTCD_Category", y="Precipitation(in)",
-            color="MUTCD_Category",
-            category_orders={"MUTCD_Category":["Menor","Intermedio","Mayor"]},
-            color_discrete_sequence=["#3498DB","#F39C12","#E74C3C"],
-            template="plotly_dark")
-        fig_box.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
-            margin=dict(l=0,r=0,t=10,b=0), height=260, showlegend=False
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TAB EDA FL — ANÁLISIS EXPLORATORIO · FLORIDA
+# ═══════════════════════════════════════════════════════════════════════════
+with tab_eda_fl:
+    fl_full, fl = load_fl_data(n=None)
+
+    # ── KPIs ──────────────────────────────────────────────────────────────
+    _fl_n       = len(fl_full)
+    _fl_years   = f"{int(fl_full['Start_Time'].dt.year.min())}–{int(fl_full['Start_Time'].dt.year.max())}"
+    _fl_top_city = fl_full["City"].value_counts().index[0]
+    _fl_pct_major = (fl_full["MUTCD"] == "Mayor").mean() * 100
+
+    st.markdown(f"""
+    <div style='margin-bottom:16px'>
+      <div style='font-family:IBM Plex Mono,monospace;font-size:9px;text-transform:uppercase;
+                  letter-spacing:.15em;color:#7A8499;margin-bottom:6px'>
+        Fuente de entrenamiento del modelo · US Accidents Dataset — Florida
+      </div>
+      <p style='font-size:13px;color:#E8ECF4;line-height:1.7;max-width:900px'>
+        Este análisis exploratorio sobre los <b>{_fl_n:,}</b> registros de Florida ({_fl_years})
+        identificó los patrones de hora, clima e infraestructura vial que luego
+        se convirtieron en las features del modelo predictivo calibrado para Panamá.
+        Las visualizaciones utilizan la totalidad de los registros de entrenamiento.
+      </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class='kpi-grid'>
+      <div class='kpi red'>
+        <div class='kpi-label'>Registros totales FL</div>
+        <div class='kpi-value' style='color:#E74C3C'>{_fl_n:,}</div>
+        <div class='kpi-sub'>{_fl_years}</div>
+      </div>
+      <div class='kpi amber'>
+        <div class='kpi-label'>Accidentes Mayor (> 2 hrs)</div>
+        <div class='kpi-value' style='color:#F39C12'>{_fl_pct_major:.1f}%</div>
+        <div class='kpi-sub'>Base de entrenamiento</div>
+      </div>
+      <div class='kpi blue'>
+        <div class='kpi-label'>Ciudad más accidentada</div>
+        <div class='kpi-value' style='color:#3498DB;font-size:1.3rem'>{_fl_top_city}</div>
+        <div class='kpi-sub'>Florida</div>
+      </div>
+      <div class='kpi green'>
+        <div class='kpi-label'>Features del modelo</div>
+        <div class='kpi-value' style='color:#2ECC71'>22</div>
+        <div class='kpi-sub'>Seleccionadas del EDA</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Fila 1: Severidad + Hora ───────────────────────────────────────────
+    st.markdown("<div class='section-header'>Distribución de severidad y patrones temporales</div>",
+                unsafe_allow_html=True)
+    c_sev, c_hour = st.columns(2, gap="medium")
+
+    with c_sev:
+        st.markdown("<div class='section-header'>Distribución MUTCD (clasificación por tiempo real)</div>",
+                    unsafe_allow_html=True)
+        _sev_counts = fl["MUTCD"].value_counts().reindex(["Mayor","Intermedio","Menor"]).reset_index()
+        _sev_counts.columns = ["Severidad","n"]
+        _sev_colors = {"Mayor":"#E74C3C","Intermedio":"#F39C12","Menor":"#3498DB"}
+        fig_sev = px.bar(
+            _sev_counts, x="Severidad", y="n",
+            color="Severidad",
+            color_discrete_map=_sev_colors,
+            text="n",
+            template="plotly_dark",
+            labels={"n":"Accidentes"},
         )
-        fig_box.update_xaxes(showgrid=False)
-        fig_box.update_yaxes(gridcolor="#252A38")
-        st.plotly_chart(fig_box, width='stretch')
-
-    with c4:
-        st.markdown("<div class='section-header'>Nubosidad vs severidad</div>", unsafe_allow_html=True)
-        fig_vis = px.violin(df.sample(1000, random_state=42),
-            x="MUTCD_Category", y="Cloud_Cover(%)",
-            color="MUTCD_Category",
-            category_orders={"MUTCD_Category":["Menor","Intermedio","Mayor"]},
-            color_discrete_sequence=["#3498DB","#F39C12","#E74C3C"],
-            template="plotly_dark", box=True)
-        fig_vis.update_layout(
+        fig_sev.update_traces(texttemplate="%{text:,}", textposition="outside",
+                              textfont_size=10, textfont_color="#E8ECF4")
+        fig_sev.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
-            margin=dict(l=0,r=0,t=10,b=0), height=260, showlegend=False
+            margin=dict(l=0,r=0,t=10,b=0), height=280,
+            showlegend=False, xaxis_title=None,
         )
-        fig_vis.update_xaxes(showgrid=False)
-        fig_vis.update_yaxes(gridcolor="#252A38")
-        st.plotly_chart(fig_vis, width='stretch')
+        fig_sev.update_yaxes(gridcolor="#252A38")
+        fig_sev.update_xaxes(showgrid=False)
+        st.plotly_chart(fig_sev, width="stretch")
 
+    with c_hour:
+        st.markdown("<div class='section-header'>Accidentes por hora del día</div>",
+                    unsafe_allow_html=True)
+        _hour_sev = fl.groupby(["Hour","MUTCD"]).size().reset_index(name="n")
+        fig_hr = px.line(
+            _hour_sev, x="Hour", y="n", color="MUTCD",
+            color_discrete_map={"Mayor":"#E74C3C","Intermedio":"#F39C12","Menor":"#3498DB"},
+            markers=True, template="plotly_dark",
+            labels={"Hour":"Hora","n":"Accidentes","MUTCD":"Severidad"},
+        )
+        fig_hr.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
+            margin=dict(l=0,r=0,t=10,b=0), height=280,
+            legend=dict(orientation="h", y=1.05), legend_title_text="",
+        )
+        fig_hr.update_xaxes(showgrid=False, dtick=2)
+        fig_hr.update_yaxes(gridcolor="#252A38")
+        # Annotations picos
+        for _h, _lbl in [(8,"Rush AM"),(17,"Rush PM")]:
+            fig_hr.add_vline(x=_h, line_dash="dot", line_color="#7A8499", line_width=1)
+            fig_hr.add_annotation(x=_h, y=0, text=_lbl, showarrow=False,
+                                  font=dict(size=9,color="#7A8499",family="IBM Plex Mono"),
+                                  yref="paper", yanchor="bottom", xanchor="center")
+        st.plotly_chart(fig_hr, width="stretch")
+
+    # ── Fila 2: Día de semana + Condición climática ────────────────────────
+    st.markdown("<div class='section-header' style='margin-top:20px'>Patrones por día de semana y condiciones climáticas</div>",
+                unsafe_allow_html=True)
+    c_dow, c_wx = st.columns(2, gap="medium")
+
+    with c_dow:
+        st.markdown("<div class='section-header'>Accidentes por día de la semana</div>",
+                    unsafe_allow_html=True)
+        _DOW_MAP = {0:"Lun",1:"Mar",2:"Mié",3:"Jue",4:"Vie",5:"Sáb",6:"Dom"}
+        _dow_sev = fl.groupby(["DayOfWeek","MUTCD"]).size().reset_index(name="n")
+        _dow_sev["Día"] = _dow_sev["DayOfWeek"].map(_DOW_MAP)
+        fig_dow = px.bar(
+            _dow_sev, x="Día", y="n", color="MUTCD",
+            barmode="stack",
+            category_orders={"Día":["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"],
+                             "MUTCD":["Menor","Intermedio","Mayor"]},
+            color_discrete_map={"Mayor":"#E74C3C","Intermedio":"#F39C12","Menor":"#3498DB"},
+            template="plotly_dark",
+            labels={"n":"Accidentes","Día":"Día","MUTCD":"Severidad"},
+        )
+        fig_dow.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
+            margin=dict(l=0,r=0,t=10,b=0), height=280,
+            legend=dict(orientation="h", y=1.05), legend_title_text="",
+        )
+        fig_dow.update_xaxes(showgrid=False)
+        fig_dow.update_yaxes(gridcolor="#252A38")
+        st.plotly_chart(fig_dow, width="stretch")
+
+    with c_wx:
+        st.markdown("<div class='section-header'>Top 10 condiciones climáticas — P(Mayor)</div>",
+                    unsafe_allow_html=True)
+        _wx_agg = (
+            fl.groupby("Weather_Condition")
+            .agg(total=("MUTCD","count"), mayor=("MUTCD", lambda x: (x=="Mayor").sum()))
+            .query("total >= 50")
+            .assign(p_mayor=lambda d: d["mayor"]/d["total"]*100)
+            .sort_values("p_mayor", ascending=False)
+            .head(10)
+            .reset_index()
+        )
+        fig_wx = go.Figure(go.Bar(
+            x=_wx_agg["p_mayor"],
+            y=_wx_agg["Weather_Condition"],
+            orientation="h",
+            marker_color=[
+                "#E74C3C" if p>=30 else "#F39C12" if p>=20 else "#3498DB"
+                for p in _wx_agg["p_mayor"]
+            ],
+            text=[f"{p:.1f}%" for p in _wx_agg["p_mayor"]],
+            textposition="outside",
+            textfont=dict(size=10, color="#E8ECF4", family="IBM Plex Mono"),
+        ))
+        fig_wx.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
+            margin=dict(l=0,r=55,t=10,b=10), height=280,
+            xaxis=dict(title="P(Mayor) %", gridcolor="#252A38", tickfont=dict(color="#7A8499",size=10)),
+            yaxis=dict(tickfont=dict(color="#E8ECF4",size=10)),
+            showlegend=False, template="plotly_dark",
+        )
+        st.plotly_chart(fig_wx, width="stretch")
+
+    # ── Fila 3: Features de infraestructura ──────────────────────────────
+    st.markdown("<div class='section-header' style='margin-top:20px'>Infraestructura vial — impacto en severidad Mayor</div>",
+                unsafe_allow_html=True)
+
+    _INFRA_COLS = ["Junction","Traffic_Signal","Crossing","Roundabout",
+                   "Station","Bump","Amenity","Stop","Railway"]
+    _infra_rows = []
+    for col in _INFRA_COLS:
+        _sub = fl[fl[col] == True]
+        if len(_sub) < 20:
+            continue
+        _p_mayor = (_sub["MUTCD"] == "Mayor").mean() * 100
+        _p_base  = (fl["MUTCD"] == "Mayor").mean() * 100
+        _infra_rows.append({"Feature": col, "P(Mayor) con feature": _p_mayor,
+                            "P(Mayor) base": _p_base, "lift": _p_mayor / max(_p_base, 0.001)})
+    _infra_df = pd.DataFrame(_infra_rows).sort_values("lift", ascending=True)
+
+    fig_infra = go.Figure()
+    fig_infra.add_trace(go.Bar(
+        x=_infra_df["P(Mayor) base"],
+        y=_infra_df["Feature"],
+        orientation="h",
+        name="Base (sin feature)",
+        marker_color="#1F2D40",
+    ))
+    fig_infra.add_trace(go.Bar(
+        x=_infra_df["P(Mayor) con feature"],
+        y=_infra_df["Feature"],
+        orientation="h",
+        name="Con feature presente",
+        marker_color=[
+            "#E74C3C" if l>1.3 else "#F39C12" if l>1.1 else "#3498DB"
+            for l in _infra_df["lift"]
+        ],
+        text=[f"lift {l:.2f}×" for l in _infra_df["lift"]],
+        textposition="outside",
+        textfont=dict(size=9, color="#E8ECF4", family="IBM Plex Mono"),
+    ))
+    fig_infra.update_layout(
+        barmode="overlay",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(19,22,29,1)",
+        margin=dict(l=0,r=80,t=10,b=10), height=300,
+        xaxis=dict(title="P(Mayor) %", gridcolor="#252A38", tickfont=dict(color="#7A8499",size=10)),
+        yaxis=dict(tickfont=dict(color="#E8ECF4",size=10)),
+        legend=dict(orientation="h", y=1.05, font=dict(size=10)),
+        template="plotly_dark",
+    )
+    st.plotly_chart(fig_infra, width="stretch")
+
+    # ── Callout insights → modelo ─────────────────────────────────────────
+    st.markdown("""
+    <div style='background:#13161D;border:1px solid rgba(41,128,185,0.4);border-radius:8px;
+                padding:16px 20px;margin-top:8px'>
+      <div style='font-family:IBM Plex Mono,monospace;font-size:9px;text-transform:uppercase;
+                  letter-spacing:.12em;color:#2980B9;margin-bottom:10px'>
+        🔗 Hallazgos FL → Features del Modelo
+      </div>
+      <div style='display:grid;grid-template-columns:repeat(3,1fr);gap:16px;font-size:12px;color:#E8ECF4;line-height:1.65'>
+        <div>
+          <div style='color:#3498DB;font-family:IBM Plex Mono,monospace;font-size:10px;
+                      text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px'>⏰ Temporal</div>
+          Dos picos claros a las <b>8h</b> y <b>17h</b> (rush hours) con mayor proporción de
+          accidentes Mayores. El <b>DayOfWeek</b> y <b>Hour</b> se incluyeron directamente en el pipeline.
+        </div>
+        <div>
+          <div style='color:#F39C12;font-family:IBM Plex Mono,monospace;font-size:10px;
+                      text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px'>🌧 Clima</div>
+          Niebla, tormenta eléctrica y lluvia fuerte elevan P(Mayor) >
+          <b>25%</b>. Se mapearon a <b>Weather_Condition</b> y se añaden en tiempo real
+          via Open-Meteo.
+        </div>
+        <div>
+          <div style='color:#E74C3C;font-family:IBM Plex Mono,monospace;font-size:10px;
+                      text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px'>🚦 Infraestructura</div>
+          <b>Junction</b> y <b>Traffic_Signal</b> muestran el mayor lift de severidad.
+          Ambas son toggleables en el sidebar del predictor para escenarios
+          personalizados.
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TAB 4 — ACTUARIAL
 # ═══════════════════════════════════════════════════════════════════════════
-with tab4:
+with tab_actuarial:
     st.markdown("<div class='section-header'>Tabla actuarial por corregimiento — base para tarifación</div>", unsafe_allow_html=True)
 
-    act_sorted = zones_df.sort_values("prima_index", ascending=False).reset_index(drop=True)
+    act_sorted = zones_dynamic.sort_values("prima_index_dyn", ascending=False).reset_index(drop=True)
 
     header_html = """
     <table class='prima-table'>
     <thead><tr>
       <th>#</th><th>Corregimiento</th><th>Nivel</th>
-      <th>INEC 2024</th><th>YoY</th>
-      <th>P(Mayor)</th><th>Peso INEC</th><th>Índice Prima</th>
+      <th>E[Freq]</th><th>YoY</th>
+      <th>P(Mayor)</th><th>Índice Prima</th>
     </tr></thead><tbody>
     """
     rows_html = ""
     for i, row in act_sorted.iterrows():
-        nivel = str(row["nivel"])
-        pill_cls = {"Crítico":"pill-critico","Alto":"pill-alto","Moderado":"pill-moderado","Bajo":"pill-bajo"}.get(nivel,"pill-bajo")
+        nivel = str(row["nivel_dyn"])
+        pill_cls = {"Critico":"pill-critico","Alto":"pill-alto","Moderado":"pill-moderado","Bajo":"pill-bajo"}.get(nivel,"pill-bajo")
         yoy_col  = "#E74C3C" if row["YoY"] > 0 else "#2ECC71"
-        pi_color = "#E74C3C" if row["prima_index"] >= 5 else ("#F39C12" if row["prima_index"] >= 2 else "#7A8499")
-        rows_html += f"""<tr>
-          <td style='color:#7A8499;font-family:IBM Plex Mono,monospace;font-size:11px'>{i+1:02d}</td>
-          <td style='font-weight:500'>{row['County']}</td>
-          <td><span class='risk-pill {pill_cls}'>{nivel}</span></td>
-          <td style='font-family:IBM Plex Mono,monospace'>{int(row['INEC_2024']):,}</td>
-          <td style='color:{yoy_col};font-family:IBM Plex Mono,monospace'>{row['YoY']*100:+.1f}%</td>
-          <td style='font-family:IBM Plex Mono,monospace'>{row['p_mayor']*100:.1f}%</td>
-          <td style='font-family:IBM Plex Mono,monospace'>{row['INEC_weight']:.4f}</td>
-          <td style='font-family:Syne,sans-serif;font-weight:700;font-size:1.1rem;color:{pi_color}'>{row['prima_index']:.2f}×</td>
-        </tr>"""
-
+        pi_color = "#E74C3C" if row["prima_index_dyn"] >= 5 else ("#F39C12" if row["prima_index_dyn"] >= 2 else "#7A8499")
+        rows_html += (
+            "<tr>"
+            "<td style='color:#7A8499;font-family:IBM Plex Mono,monospace;font-size:11px'>" + "{:02d}".format(i+1) + "</td>"
+            "<td style='font-weight:500'>" + str(row["County"]) + "</td>"
+            "<td><span class='risk-pill " + pill_cls + "'>" + nivel + "</span></td>"
+            "<td style='font-family:IBM Plex Mono,monospace'>" + "{:.3f}".format(row["freq_pred_dyn"]) + "</td>"
+            "<td style='color:" + yoy_col + ";font-family:IBM Plex Mono,monospace'>" + "{:+.1f}%".format(row["YoY"]*100) + "</td>"
+            "<td style='font-family:IBM Plex Mono,monospace'>" + "{:.1f}%".format(row["p_mayor"]*100) + "</td>"
+            "<td style='font-family:Syne,sans-serif;font-weight:700;font-size:1.1rem;color:" + pi_color + "'>" + "{:.2f}&times;".format(row["prima_index_dyn"]) + "</td>"
+            "</tr>"
+        )
     st.markdown(header_html + rows_html + "</tbody></table>", unsafe_allow_html=True)
 
     st.markdown("<div class='section-header' style='margin-top:32px'>Índice de prima técnica relativa (scatter)</div>", unsafe_allow_html=True)
     fig_act = px.scatter(act_sorted,
-        x="INEC_2024", y="p_mayor",
-        size="prima_index", color="nivel",
+        x="freq_pred_dyn", y="p_mayor",
+        size="prima_index_dyn", color="nivel_dyn",
         color_discrete_map={"Crítico":"#E74C3C","Alto":"#F39C12","Moderado":"#2ECC71","Bajo":"#3498DB"},
         text="County",
-        labels={"INEC_2024":"Accidentes INEC 2024","p_mayor":"P(Accidente Mayor)","nivel":"Nivel"},
+        labels={"freq_pred_dyn":"E[Frecuencia] Poisson","p_mayor":"P(Accidente Mayor)","nivel":"Nivel"},
         template="plotly_dark",
         size_max=50)
     fig_act.update_traces(textposition="top center", textfont_size=9, textfont_color="#7A8499")
@@ -1088,14 +1470,54 @@ with tab4:
     fig_act.update_yaxes(showgrid=True, gridcolor="#252A38")
     st.plotly_chart(fig_act, width='stretch')
 
+    # ── Factores de Recargo por Vía ───────────────────────────────────────
+    st.markdown("<div class='section-header' style='margin-top:32px'>Factores de Recargo (Micro-segmentación por Vía)</div>", unsafe_allow_html=True)
+    
+    _rt_act = df.groupby("Road_Type").apply(lambda x: pd.Series({
+        "total": len(x),
+        "p_mayor": (x["MUTCD_Category"]=="Mayor").mean() * 100
+    }), include_groups=False).reset_index()
+    _rt_act = _rt_act[_rt_act["total"] > 10]
+    
+    if "avenue" in _rt_act["Road_Type"].values:
+        _base_p = _rt_act.loc[_rt_act["Road_Type"]=="avenue", "p_mayor"].values[0]
+    else:
+        _base_p = _rt_act["p_mayor"].min()
+        
+    _rt_act["recargo"] = _rt_act["p_mayor"] / max(_base_p, 0.001)
+    
+    # Aplicar un piso técnico (floor) actuarial del 0.75x para evitar recargos nulos (0.00x)
+    _rt_act["recargo"] = _rt_act["recargo"].apply(lambda x: max(x, 0.75))
+    _rt_act = _rt_act.sort_values("recargo", ascending=False)
+    
+    _cards_html = "<div style='display:flex;gap:12px;flex-wrap:wrap'>"
+    for _, _row in _rt_act.iterrows():
+        _rc_color = "#E74C3C" if _row["recargo"] > 1.5 else ("#F39C12" if _row["recargo"] > 1.1 else "#2ECC71")
+        _p_text = "{:.2f}%".format(_row['p_mayor']) if _row['p_mayor'] > 0 else "&lt; 0.01%"
+        _cards_html += (
+            "<div style='flex:1;min-width:120px;text-align:center;padding:12px;"
+            "background:#1A1E28;border-radius:6px;border:1px solid #252A38'>"
+            "<div style='font-family:IBM Plex Mono,monospace;font-size:11px;color:#E8ECF4;"
+            "text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px'>"
+            + str(_row['Road_Type'])
+            + "</div><div style='font-family:Syne,sans-serif;font-size:1.6rem;font-weight:700;color:"
+            + _rc_color + "'>"
+            + "{:.2f}x".format(_row['recargo'])
+            + "</div><div style='font-size:10px;color:#7A8499;margin-top:2px'>P(Mayor): "
+            + _p_text
+            + "</div></div>"
+        )
+    _cards_html += "</div>"
+    st.markdown(_cards_html, unsafe_allow_html=True)
+
     st.markdown("""
-    <div style='background:#13161D;border:1px solid #252A38;border-radius:8px;padding:16px 20px;margin-top:12px'>
+    <div style='background:#13161D;border:1px solid #252A38;border-radius:8px;padding:16px 20px;margin-top:24px'>
       <div style='font-family:IBM Plex Mono,monospace;font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:#7A8499;margin-bottom:10px'>
         Metodología actuarial
       </div>
       <div style='font-size:13px;color:#E8ECF4;line-height:1.7'>
         <b>Prima técnica</b> = E[Frecuencia] × P(Mayor | siniestro) × E[Costo siniestro] × (1 + loading)<br>
-        <b>Índice relativo</b> = (INEC_weight × P(Mayor) × (1 + YoY)) / min(mismo producto)<br>
+        <b>Índice relativo</b> = (E[Freq_Poisson] × P(Mayor) × (1 + YoY)) / min(mismo producto)<br>
         <b>Calibración</b>: predicciones FL ajustadas con peso INEC por corregimiento<br>
         <span style='color:#7A8499'>Pendiente: dataset de montos reales para calibrar E[Costo]. Fuente sugerida: FEDPA con campos de liquidación.</span>
       </div>

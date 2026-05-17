@@ -3,8 +3,7 @@ flowchart TD
 
     %% ── PUNTO DE PARTIDA ──────────────────────────────────────────
     A(["`**Proyecto Integrador 2**
-    04_EDA_FL_v2.ipynb
-    04_FL_estimaciones_beta.ipynb`"])
+    04_EDA_FL_v2.ipynb · 04_FL_estimaciones_beta.ipynb`"])
 
     %% ── FIXES TÉCNICOS ────────────────────────────────────────────
     A --> B["`**Gaps técnicos identificados**`"]
@@ -43,16 +42,16 @@ flowchart TD
     Modelo entrenado en Florida
     Sin anclaje a realidad panameña`"]
 
-    %% ── FUENTES DE DATOS REALES ───────────────────────────────────
+    %% ── CONSTRUCCIÓN DEL PUENTE FL→PA ────────────────────────────
     GAP --> CAPAS["`**Construcción del puente FL → PA**
     Incorporación de fuentes reales en capas`"]
 
-    %% ── CAPA 1: FEDPA ─────────────────────────────────────────────
+    %% ── CAPA 1: FRECUENCIA TERRITORIAL ───────────────────────────
     CAPAS --> C1["`**Capa 1 · Frecuencia territorial**`"]
 
     FEDPA["`📄 FEDPAListado__.xlsx
     517 reclamos de automóvil
-    Broker panameño deidentificado`"]
+    Broker panameño`"]
     INEC_MAP1["`🗺️ PDF INEC 2024
     Accidentes por corregimiento
     Distrito de Panamá`"]
@@ -86,7 +85,7 @@ flowchart TD
     C2 --> OUT2["`inec_hour_probs.csv
     Distribución empírica real por zona
     Chilibre peak 7pm · Las Cumbres peak 7am
-    Reemplaza Gaussiana aproximada`"]
+    Reemplaza distribución Gaussiana aproximada`"]
 
     %% ── CAPA 3: HORA × DÍA ────────────────────────────────────────
     OUT2 --> C3["`**Capa 3 · Interacción hora × día**`"]
@@ -132,56 +131,80 @@ flowchart TD
     Picos Jun y Dic \(1.88x y 1.97x\)
     Feature nueva: Clase_Accidente`"]
 
+    %% ── CAPA 5: VÍA Y TIPO DE CARRETERA ──────────────────────────
+    OUT4 --> C5["`**Capa 5 · Vía y tipo de carretera**`"]
+
+    CSV_C1["`📊 CSV INEC
+    Accidentes por vía y corregimiento 2024
+    Distrito de Panamá`"]
+    CSV_C2["`📊 CSV INEC
+    Accidentes por vía y corregimiento 2024
+    Distrito de San Miguelito`"]
+
+    CSV_C1 --> C5
+    CSV_C2 --> C5
+
+    C5 --> OUT5["`inec_road_dist.json
+    271 vías únicas · 26 corregimientos
+    Road_Type: highway · avenue · street · coastal · local
+    Clase condicionada al tipo de vía
+    P\(Mayor\): highway 0.85% · street 0.79% · avenue 0.41%
+    Infraestructura calibrada por tipo de vía
+    Features nuevas: Via · Road_Type`"]
+
     %% ── CONTEXTO COMERCIAL ────────────────────────────────────────
-    C4 --> COM["`📄 Siniestralidad.md · RAFMAR Seguros
+    C5 --> COM["`📄 Siniestralidad.md · RAFMAR Seguros
     Loss ratio auto real Panamá 24.67%
     Contexto pitch asegurador · no entra al modelo`"]
 
     %% ── DATASET SINTÉTICO FINAL ───────────────────────────────────
-    OUT1 & OUT2 & OUT3 & OUT4 --> DS
+    OUT1 & OUT2 & OUT3 & OUT4 & OUT5 --> DS
 
-    DS["`**panama_synthetic_accidents.csv v4**
-    5,000 registros · 40 columnas · 0 nulos
+    DS["`**panama_synthetic_accidents.csv v5**
+    5,000 registros · 42 columnas · 0 nulos
     Frecuencia: INEC_weight por corregimiento
     Hora: distribución real por zona
     Día: matriz conjunta P\(hora, día\) INEC
     Severidad: distribución observada Panamá
-    Estacionalidad: factores Jun/Dic reales
-    Drop-in compatible con FEATURE_COLS del modelo`"]
+    Vía: sampleada por prob. real INEC por zona
+    Road_Type: condiciona clase e infraestructura
+    Estacionalidad: factores Jun/Dic reales`"]
 
     %% ── WEATHER ENRICHMENT ────────────────────────────────────────
     DS --> WX["`**weather_enrichment.py**
     Open-Meteo Archive API \(ERA5\)
     Estrategia: forecast → climatología → defaults
-    Columnas reemplazadas: Temp · Humedad · Precip · Viento · Condición
-    Columnas nuevas: Wind_Gusts · Cloud_Cover
-    Columna eliminada: Visibility \(no disponible en ERA5\)
-    Cache SQLite · checkpoint · 3 niveles de fallback`"]
+    Temp · Humedad · Precip · Viento · Condición · Nubosidad
+    Cache SQLite · checkpoint cada 50 llamadas
+    3 niveles de fallback`"]
 
-    DS --> WX
     WX --> DS_W["`panama_synthetic_accidents_weather.csv
     Features climáticas 100% observadas ERA5`"]
 
-    %% ── OUTPUTS FINALES ───────────────────────────────────────────
+    %% ── MODELO SERIALIZADO ────────────────────────────────────────
     MOD --> JOBLIB["`accident_prediction_system.joblib
-    Clase encapsulada · Pipeline completo
-    Poisson GLM + RF Calibrado
-    Serializable con joblib`"]
+    Poisson GLM + RF Calibrado encapsulados
+    predict_frequency\(\) · predict_severity\(\)
+    Serializable · drop-in para app.py`"]
 
+    %% ── DASHBOARD ─────────────────────────────────────────────────
     DS_W & JOBLIB --> APP
 
-    APP["`**app.py — RiskMap PA Dashboard**
-    4 tabs: Predictor · Mapa de Riesgo · Análisis · Actuarial
-    Weather automático en tiempo real
-    Calibración con INEC_weight por corregimiento
-    Domain shift callout FL → PA
-    Índice prima técnica relativa por zona`"]
+    APP["`**app.py — RiskMap PA**
+    Tab 1 · Predictor
+    — Etapa 1: E\[Frecuencia\] Poisson por zona/hora/mes
+    — Etapa 2: P\(Severidad\) RF calibrado + INEC_weight
+    — E\[Frec\] × P\(Mayor\) → exposición actuarial
+    Tab 2 · Mapa de riesgo por corregimiento
+    Tab 3 · Análisis hora · día · clima · vía
+    Tab 4 · Índice prima técnica relativa`"]
 
     %% ── PENDIENTES ────────────────────────────────────────────────
     APP --> PEN["`**Pendientes para producción**
-    Validación transferibilidad FL → PA \(requiere INEC real con severidad\)
-    E\[Costo siniestro\] desde FEDPA con montos de liquidación
+    Validación FL→PA con microdato individual TTT/INEC
+    E\[Costo siniestro\] desde FEDPA con montos liquidación
     Expansión provincial fuera del Distrito de Panamá
+    Reentrenamiento con datos panameños reales
     Mapeo a variables permitidas SBP`"]
 
     %% ── ESTILOS ───────────────────────────────────────────────────
@@ -201,13 +224,12 @@ flowchart TD
     class FIX,MOD fix
     class GAP gap
     class CAPAS capa
-    class FEDPA,INEC_MAP1,INEC_MAP2,CSV_H1,CSV_H2,CSV_D1,CSV_D2,CSV_F1,CSV_F2,CSV_V1,CSV_V2 fuente
-    class C1,C2,C3,C4 capa
-    class OUT1,OUT2,OUT3,OUT4 output
+    class FEDPA,INEC_MAP1,INEC_MAP2,CSV_H1,CSV_H2,CSV_D1,CSV_D2,CSV_F1,CSV_F2,CSV_V1,CSV_V2,CSV_C1,CSV_C2 fuente
+    class C1,C2,C3,C4,C5 capa
+    class OUT1,OUT2,OUT3,OUT4,OUT5 output
     class COM fuente
     class DS,DS_W dataset
-    class WX fix
-    class JOBLIB fix
+    class WX,JOBLIB fix
     class APP app
     class PEN pendiente
 ```
