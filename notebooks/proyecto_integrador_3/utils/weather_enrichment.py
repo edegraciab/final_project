@@ -408,6 +408,192 @@ def enrich_weather(
     return df_enriched
 
 
+# ── Live weather (Forecast API) ──────────────────────────────────────────────
+_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+
+# Variables disponibles en el Forecast API (same names as Archive)
+_FORECAST_VARS = [
+    "temperature_2m",
+    "relative_humidity_2m",
+    "precipitation",
+    "weather_code",
+    "wind_speed_10m",
+    "wind_gusts_10m",
+    "cloud_cover",
+    "visibility",          # sí disponible en Forecast (a diferencia de ERA5)
+]
+
+
+def get_live_weather(
+    lat: float,
+    lng: float,
+    target_dt,           # datetime object, local Panama time
+    climatology: dict | None = None,
+    cache_dir: str = ".openmeteo_cache",
+) -> dict:
+    """
+    Devuelve un dict con condiciones climáticas para (lat, lng, datetime).
+
+    Estrategia:
+      1. Si la fecha está dentro de los próximos 16 días o los últimos 5 días
+         → Open-Meteo Forecast API (datos reales / pronóstico).
+      2. En caso contrario → climatología precalculada del CSV ERA5.
+         Si no se pasa climatología → valores típicos de Panama City.
+
+    Retorna
+    -------
+    dict con claves:
+        temperature_f, humidity_pct, precip_in, wind_mph, gusts_mph,
+        cloud_pct, visibility_mi, weather_condition, weather_code,
+        source  ("forecast" | "climatology")
+    """
+    import datetime as _dt
+
+    if isinstance(target_dt, _dt.date) and not isinstance(target_dt, _dt.datetime):
+        target_dt = _dt.datetime(target_dt.year, target_dt.month, target_dt.day, 12)
+
+    now       = _dt.datetime.now()
+    delta     = (target_dt.date() - now.date()).days   # días desde hoy
+
+    # ── Intento Forecast API (−60 … +16 días) ────────────────────────────────
+    # Open-Meteo Forecast soporta hasta past_days=92 (pasado) y +16 futuro.
+    if -60 <= delta <= 16:
+        try:
+            sess = _build_session(cache_dir)
+            params = {
+                "latitude":           round(lat, 4),
+                "longitude":          round(lng, 4),
+                "start_date":         target_dt.strftime("%Y-%m-%d"),
+                "end_date":           target_dt.strftime("%Y-%m-%d"),
+                "hourly":             ",".join(_FORECAST_VARS),
+                "timezone":           "America/Panama",
+                "temperature_unit":   "fahrenheit",
+                "wind_speed_unit":    "mph",
+                "precipitation_unit": "inch",
+                # past_days soportado hasta 92; para fechas futuras se ignora.
+                "past_days":          max(0, -delta),
+            }
+            resp = sess.get(_FORECAST_URL, params=params, timeout=10)
+            resp.raise_for_status()
+            data   = resp.json()
+            hourly = data.get("hourly", {})
+
+            h = target_dt.hour
+            def _v(key, default=None):
+                arr = hourly.get(key, [])
+                return arr[h] if h < len(arr) else default
+
+            wmo  = _v("weather_code")
+            vis_m = _v("visibility")          # metros en Forecast
+            vis_mi = (vis_m / 1609.34) if vis_m is not None else 7.0
+            vis_mi = round(min(vis_mi, 10.0), 2)
+
+            return {
+                "temperature_f":     _v("temperature_2m",      84.0),
+                "humidity_pct":      _v("relative_humidity_2m", 80.0),
+                "precip_in":         _v("precipitation",         0.0),
+                "wind_mph":          _v("wind_speed_10m",        8.0),
+                "gusts_mph":         _v("wind_gusts_10m",       12.0),
+                "cloud_pct":         _v("cloud_cover",          50.0),
+                "visibility_mi":     vis_mi,
+                "weather_code":      wmo,
+                "weather_condition": wmo_to_string(wmo),
+                "source":            "forecast",
+            }
+        except Exception as exc:
+            log.warning("Forecast API failed (%s); falling back to climatology. %s", target_dt, exc)
+
+    # ── Fallback: climatología ─────────────────────────────────────────────
+    if climatology:
+        key = (round(lat, 2), round(lng, 2), target_dt.month, target_dt.hour)
+        # Try exact key, then month+hour only, then just month
+        row = (
+            climatology.get(key)
+            or climatology.get((None, None, target_dt.month, target_dt.hour))
+            or climatology.get((None, None, target_dt.month, None))
+        )
+        if row:
+            return {**row, "source": "climatology"}
+
+    # ── Defaults de Panama City si todo falla ─────────────────────────────
+    log.warning("No climatology available; using Panama City defaults.")
+    is_wet = target_dt.month in {5, 6, 7, 8, 9, 10, 11}
+    return {
+        "temperature_f":     82.0 if is_wet else 88.0,
+        "humidity_pct":      88.0 if is_wet else 72.0,
+        "precip_in":          0.05 if is_wet else 0.0,
+        "wind_mph":            8.0,
+        "gusts_mph":          14.0,
+        "cloud_pct":          80.0 if is_wet else 40.0,
+        "visibility_mi":       7.0,
+        "weather_code":        None,
+        "weather_condition": "Rain" if is_wet else "Clear",
+        "source":            "default",
+    }
+
+
+def build_climatology(enriched_csv: str) -> dict:
+    """
+    Pre-computa medianas climáticas por (lat_r, lng_r, Month, Hour)
+    desde el CSV enriquecido con ERA5.
+
+    Retorna un dict  {(lat_r, lng_r, month, hour): {...valores...}}
+    listo para pasarse a get_live_weather(climatology=...).
+
+    También guarda claves (None, None, month, hour) con la mediana
+    global por mes+hora (fallback de segundo nivel).
+    """
+    df = pd.read_csv(enriched_csv)
+    df["lat_r"] = df["Start_Lat"].round(2)
+    df["lng_r"] = df["Start_Lng"].round(2)
+
+    num_cols = {
+        "Temperature(F)":    "temperature_f",
+        "Humidity(%)":       "humidity_pct",
+        "Precipitation(in)": "precip_in",
+        "Wind_Speed(mph)":   "wind_mph",
+        "Wind_Gusts(mph)":   "gusts_mph",
+        "Cloud_Cover(%)":    "cloud_pct",
+    }
+
+    result: dict = {}
+
+    # ── Nivel 1: por zona×mes×hora ─────────────────────────────────────
+    grp = df.groupby(["lat_r", "lng_r", "Month", "Hour"])
+    for (lat_r, lng_r, month, hour), g in grp:
+        entry: dict = {}
+        for csv_col, key in num_cols.items():
+            if csv_col in g.columns:
+                entry[key] = round(float(g[csv_col].median()), 2)
+        # Visibility no está en ERA5 → usar 7.0 como proxy Panama City
+        entry["visibility_mi"] = 7.0
+        # Moda de Weather_Condition
+        if "Weather_Condition" in g.columns:
+            mode_series = g["Weather_Condition"].mode()
+            entry["weather_condition"] = mode_series.iloc[0] if len(mode_series) else "Clear"
+        entry["weather_code"] = None
+        result[(lat_r, lng_r, month, hour)] = entry
+
+    # ── Nivel 2: global mes×hora ───────────────────────────────────────
+    grp2 = df.groupby(["Month", "Hour"])
+    for (month, hour), g in grp2:
+        entry = {}
+        for csv_col, key in num_cols.items():
+            if csv_col in g.columns:
+                entry[key] = round(float(g[csv_col].median()), 2)
+        entry["visibility_mi"] = 7.0
+        if "Weather_Condition" in g.columns:
+            mode_series = g["Weather_Condition"].mode()
+            entry["weather_condition"] = mode_series.iloc[0] if len(mode_series) else "Clear"
+        entry["weather_code"] = None
+        result[(None, None, month, hour)] = entry
+
+    log.info("Climatology built: %d zona-entries + %d global-entries",
+             len([k for k in result if k[0] is not None]),
+             len([k for k in result if k[0] is None]))
+    return result
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(

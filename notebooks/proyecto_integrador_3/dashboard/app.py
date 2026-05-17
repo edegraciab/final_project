@@ -18,8 +18,12 @@ from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler
 import pickle
 import json
+import datetime
 from pathlib import Path
 import warnings
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
+from weather_enrichment import get_live_weather, build_climatology, wmo_to_string
 warnings.filterwarnings("ignore")
 
 # Import the class so it lives in this process's namespace
@@ -176,18 +180,34 @@ div[data-testid="stTabs"] [role="tab"] {
 
 # ─── Paths ─────────────────────────────────────────────────────────────────
 _DASHBOARD_DIR   = Path(__file__).parent
-_OUTPUT_DATA_DIR = _DASHBOARD_DIR.parents[2] / "output" / "data"
+_OUTPUT_DATA_DIR = _DASHBOARD_DIR.parents[1] / "output" / "data"
 
 # ─── Data & model ──────────────────────────────────────────────────────────
 @st.cache_data
 def load_data():
-    df = pd.read_csv(_OUTPUT_DATA_DIR / "panama_synthetic_accidents.csv")
+    df = pd.read_csv(_OUTPUT_DATA_DIR / "panama_synthetic_accidents_weather.csv")
     df["Start_Time"] = pd.to_datetime(df["Start_Time"])
     df["wet_season"] = df["Month"].isin([5,6,7,8,9,10,11]).map({True:"Húmeda", False:"Seca"})
     bins = [0, 454, 648, 1969, 9999]
     labels = ["Bajo","Moderado","Alto","Crítico"]
     df["nivel_riesgo"] = pd.cut(df["INEC_2024"], bins=bins, labels=labels)
     return df
+
+@st.cache_resource
+def load_climatology():
+    """Pre-computa medianas ERA5 por zona×mes×hora. Carga una sola vez."""
+    return build_climatology(str(_OUTPUT_DATA_DIR / "panama_synthetic_accidents_weather.csv"))
+
+@st.cache_data(ttl=600)
+def cached_live_weather(lat: float, lng: float, date_str: str, hour: int) -> dict:
+    """Llama get_live_weather con cache de 10 min para evitar llamadas repetidas."""
+    target_dt = datetime.datetime.strptime(date_str, "%Y-%m-%d").replace(hour=hour)
+    clim = load_climatology()
+    return get_live_weather(
+        lat=lat, lng=lng, target_dt=target_dt,
+        climatology=clim,
+        cache_dir=str(_DASHBOARD_DIR / ".openmeteo_cache"),
+    )
 
 @st.cache_resource
 def load_model():
@@ -239,6 +259,7 @@ def zone_summary(df):
 df = load_data()
 sistema = load_model()
 zones_df = zone_summary(df)
+clim_loaded = False  # se carga lazy al primer predict
 
 with open(_OUTPUT_DATA_DIR / "panama_severity_dist.json", encoding="utf-8") as _sev_f:
     severity_dist = json.load(_sev_f)
@@ -274,15 +295,15 @@ with st.sidebar:
 
     corregimiento = st.selectbox("Corregimiento", sorted(df["County"].unique()))
     hora          = st.slider("Hora del siniestro", 0, 23, 17)
-    mes           = st.selectbox("Mes", list(range(1,13)),
-                        format_func=lambda m: ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"][m-1],
-                        index=5)
-    weather       = st.selectbox("Condición climática",
-                        ["Clear","Fair","Partly Cloudy","Overcast","Rain","Heavy Rain","Thunderstorm"])
-    temp          = st.slider("Temperatura (°F)", 72, 96, 84)
-    humidity      = st.slider("Humedad (%)", 40, 99, 80)
-    visibility    = st.slider("Visibilidad (mi)", 1.0, 10.0, 7.0, 0.5)
-    precip        = st.slider("Precipitación (in)", 0.0, 0.8, 0.05, 0.01)
+    fecha_sel     = st.date_input(
+        "Fecha del siniestro",
+        value=datetime.date.today(),
+        min_value=datetime.date(2020, 1, 1),
+        max_value=datetime.date.today() + datetime.timedelta(days=16),
+        help="Fechas dentro de ±5 días usan pronóstico en tiempo real. Fechas lejanas usan climatología ERA5.",
+    )
+    mes = fecha_sel.month
+    dow = fecha_sel.weekday()   # 0=Lunes … 6=Domingo
 
     st.markdown("---")
     st.markdown("#### Infraestructura vial")
@@ -339,15 +360,22 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 
-# ─── Compute prediction ────────────────────────────────────────────────────
-zone_row  = zones_df[zones_df["County"] == corregimiento].iloc[0]
-sunrise   = "Day" if 6 <= hora <= 18 else "Night"
-dow       = 4  # neutral Friday
+# ─── Fetch weather automático ─────────────────────────────────────────────
+zone_row = zones_df[zones_df["County"] == corregimiento].iloc[0]
+sunrise  = "Day" if 6 <= hora <= 18 else "Night"
 
+wx = cached_live_weather(
+    lat      = float(zone_row["lat"]),
+    lng      = float(zone_row["lng"]),
+    date_str = fecha_sel.strftime("%Y-%m-%d"),
+    hour     = hora,
+)
+
+# ─── Compute prediction ────────────────────────────────────────────────────
 input_row = pd.DataFrame([{
     "Start_Lat":         zone_row["lat"],
     "Start_Lng":         zone_row["lng"],
-    "City":              "Panama City",   # constant across the dataset
+    "City":              "Panama City",
     "County":            corregimiento,
     "Amenity":           False,
     "Bump":              False,
@@ -361,20 +389,42 @@ input_row = pd.DataFrame([{
     "Stop":              False,
     "Traffic_Calming":   False,
     "Traffic_Signal":    signal,
-    "Temperature(F)":    temp,
-    "Humidity(%)":       humidity,
-    "Visibility(mi)":    visibility,
-    "Wind_Speed(mph)":   8.0,
-    "Precipitation(in)": precip,
+    "Temperature(F)":    wx["temperature_f"],
+    "Humidity(%)":       wx["humidity_pct"],
+    "Visibility(mi)":    wx["visibility_mi"],
+    "Wind_Speed(mph)":   wx["wind_mph"],
+    "Precipitation(in)": wx["precip_in"],
     "Hour":              hora,
     "DayOfWeek":         dow,
     "Month":             mes,
-    "Weather_Condition": weather,
+    "Weather_Condition": wx["weather_condition"],
     "Sunrise_Sunset":    sunrise,
 }])
 
 result = sistema.predict_severity(input_row)
+#st.write("DEBUG columns:", result.columns.tolist())
+#st.write("DEBUG result:", result)
+#st.stop()  # detiene la ejecución aquí
 probs  = result[["prob_Menor","prob_Intermedio","prob_Mayor"]].values[0]
+
+# ── Etapa 1: Frecuencia esperada (Poisson) ─────────────────────────
+zone_df_poisson = pd.DataFrame([{
+    "County":          corregimiento,
+    "Hour":            hora,
+    "Month":           mes,
+    "temp_mean":       wx["temperature_f"],
+    "humidity_mean":   wx["humidity_pct"],
+    "visibility_mean": wx.get("visibility_mi", 7.0),
+    "rain_mean":       wx["precip_in"],
+}])
+
+try:
+    freq_pred = float(sistema.predict_frequency(zone_df_poisson)[0])
+    freq_pred = max(0.0, round(freq_pred, 2))
+except Exception:
+    # Fallback: estimación desde INEC si Poisson falla
+    freq_pred = round(float(zone_row["INEC_2024"]) / 8760, 2)  # acc/hora anual
+
 # Calibrar con peso INEC
 mean_w  = zones_df["INEC_weight"].mean()
 cal_fac = zone_row["INEC_weight"] / mean_w
@@ -459,12 +509,47 @@ with tab1:
           <div class='pred-label'>Severidad predicha</div>
           <div class='pred-value' style='color:{sev_color}'>{sev_label}</div>
           <div style='font-size:11px;color:#7A8499;margin-top:4px'>
-            Hora {hora:02d}:00 · {"Wet" if mes in [5,6,7,8,9,10,11] else "Dry"} season · {weather}
+            Hora {hora:02d}:00 · {"Wet" if mes in [5,6,7,8,9,10,11] else "Dry"} season · {wx["weather_condition"]}
           </div>
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("<div class='section-header'>Probabilidades calibradas (INEC)</div>", unsafe_allow_html=True)
+        # ── Etapa 1 — Frecuencia esperada Poisson ──
+        st.markdown("<div class='section-header'>Etapa 1 · Frecuencia esperada (Poisson)</div>",
+                    unsafe_allow_html=True)
+
+        freq_color = (
+            "#E74C3C" if freq_pred >= 3.0
+            else "#F39C12" if freq_pred >= 1.5
+            else "#2ECC71"
+        )
+        freq_label = (
+            "Alta frecuencia" if freq_pred >= 3.0
+            else "Frecuencia moderada" if freq_pred >= 1.5
+            else "Baja frecuencia"
+        )
+
+        st.markdown(f"""
+        <div class='pred-card' style='margin-bottom:10px'>
+          <div class='pred-label'>Accidentes esperados / hora · zona · condición</div>
+          <div style='display:flex;align-items:baseline;gap:10px;margin-top:4px'>
+            <div class='pred-value' style='color:{freq_color}'>{freq_pred:.2f}</div>
+            <div style='font-size:12px;color:#7A8499'>acc/hora</div>
+          </div>
+          <div style='margin-top:8px;display:flex;align-items:center;gap:8px'>
+            <span class='risk-pill' style='background:{freq_color}22;
+                  color:{freq_color};border:1px solid {freq_color}44'>
+              {freq_label}
+            </span>
+            <span style='font-size:11px;color:#7A8499'>
+              {corregimiento} · {hora:02d}:00h · {wx["weather_condition"]}
+            </span>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Etapa 2 — Severidad condicional (Random Forest) ──
+        st.markdown("<div class='section-header'>Etapa 2 · Severidad condicional (Random Forest)</div>", unsafe_allow_html=True)
 
         for label, prob, color in [("MENOR",prob_m,"#3498DB"),("INTERMEDIO",prob_i,"#F39C12"),("MAYOR",prob_ma,"#E74C3C")]:
             st.markdown(f"""
@@ -478,6 +563,27 @@ with tab1:
               </div>
             </div>
             """, unsafe_allow_html=True)
+
+        # ── Prima técnica combinada (Etapa 1 × Etapa 2) ──
+        prima_combinada = freq_pred * prob_ma
+        st.markdown(f"""
+        <div style='background:#13161D;border:1px solid #252A38;border-radius:8px;
+                    padding:12px 16px;margin-bottom:12px'>
+          <div style='font-family:IBM Plex Mono,monospace;font-size:9px;text-transform:uppercase;
+                      letter-spacing:.12em;color:#7A8499;margin-bottom:6px'>
+            E\u005bFrec\u005d \u00d7 P(Mayor) \u2192 exposici\u00f3n actuarial
+          </div>
+          <div style='display:flex;align-items:baseline;gap:8px'>
+            <span style='font-family:Syne,sans-serif;font-size:1.5rem;
+                         font-weight:700;color:#F39C12'>{prima_combinada:.4f}</span>
+            <span style='font-size:11px;color:#7A8499'>acc. mayores esperados/hora</span>
+          </div>
+          <div style='font-size:10px;color:#4A5568;font-family:IBM Plex Mono,monospace;margin-top:4px'>
+            {freq_pred:.2f} acc/h \u00d7 {prob_ma*100:.2f}% P(Mayor) 
+            \u00d7 INEC_weight {float(zone_row["INEC_weight"]):.4f}
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
         prima_idx = float(zone_row["prima_index"])
         yoy_pct   = float(zone_row["YoY"]) * 100
@@ -493,6 +599,83 @@ with tab1:
 
     with col_ctx:
         st.markdown("<div class='section-header'>Contexto climático e infraestructura</div>", unsafe_allow_html=True)
+
+        # ── Tarjeta de condiciones climáticas automáticas ──
+        _src        = wx.get("source", "default")
+        _src_badge  = {
+            "forecast":    ("🟢", "En vivo · Forecast",   "#27AE60"),
+            "climatology": ("📊", "ERA5 · Climatología",   "#2980B9"),
+            "default":     ("⚪", "Valores por defecto",    "#7A8499"),
+        }.get(_src, ("⚪", _src, "#7A8499"))
+        _wmo_icons = {
+            "Clear":"☀️","Mostly Clear":"🌤️","Partly Cloudy":"⛅",
+            "Overcast":"☁️","Fog":"🌫️","Light Drizzle":"🌦️",
+            "Drizzle":"🌦️","Heavy Drizzle":"🌧️","Light Rain":"🌧️",
+            "Rain":"🌧️","Heavy Rain":"🌧️","Rain Showers":"🌧️",
+            "Heavy Rain Showers":"⛈️","Thunderstorm":"⛈️",
+        }
+        _wicon = _wmo_icons.get(wx["weather_condition"], "🌡️")
+        st.markdown(f"""
+        <div style='background:#13161D;border:1px solid #252A38;border-radius:10px;
+                    padding:14px 18px;margin-bottom:14px'>
+          <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px'>
+            <div style='font-family:IBM Plex Mono,monospace;font-size:9px;
+                        text-transform:uppercase;letter-spacing:.12em;color:#7A8499'>
+              Condiciones climáticas
+            </div>
+            <div style='font-size:10px;color:{_src_badge[2]};font-family:IBM Plex Mono,monospace;
+                        background:{_src_badge[2]}22;border:1px solid {_src_badge[2]}44;
+                        border-radius:20px;padding:2px 10px'>
+              {_src_badge[0]} {_src_badge[1]}
+            </div>
+          </div>
+          <div style='font-size:1.6rem;margin-bottom:8px'>{_wicon}
+            <span style='font-family:Syne,sans-serif;font-size:1rem;font-weight:700;
+                         color:#E8ECF4;margin-left:6px'>{wx["weather_condition"]}</span>
+          </div>
+          <div style='display:grid;grid-template-columns:repeat(3,1fr);gap:8px'>
+            <div style='background:#1A1E28;border-radius:6px;padding:8px 10px;text-align:center'>
+              <div style='font-size:8px;color:#7A8499;font-family:IBM Plex Mono,monospace;
+                          text-transform:uppercase;letter-spacing:.08em'>Temp</div>
+              <div style='font-family:Syne,sans-serif;font-size:1.1rem;font-weight:700;
+                          color:#F39C12'>{wx["temperature_f"]:.1f}°F</div>
+            </div>
+            <div style='background:#1A1E28;border-radius:6px;padding:8px 10px;text-align:center'>
+              <div style='font-size:8px;color:#7A8499;font-family:IBM Plex Mono,monospace;
+                          text-transform:uppercase;letter-spacing:.08em'>Humedad</div>
+              <div style='font-family:Syne,sans-serif;font-size:1.1rem;font-weight:700;
+                          color:#3498DB'>{wx["humidity_pct"]:.0f}%</div>
+            </div>
+            <div style='background:#1A1E28;border-radius:6px;padding:8px 10px;text-align:center'>
+              <div style='font-size:8px;color:#7A8499;font-family:IBM Plex Mono,monospace;
+                          text-transform:uppercase;letter-spacing:.08em'>Precip</div>
+              <div style='font-family:Syne,sans-serif;font-size:1.1rem;font-weight:700;
+                          color:#{'E74C3C' if wx['precip_in']>0.1 else '7A8499'}'>{wx["precip_in"]:.3f}"</div>
+            </div>
+            <div style='background:#1A1E28;border-radius:6px;padding:8px 10px;text-align:center'>
+              <div style='font-size:8px;color:#7A8499;font-family:IBM Plex Mono,monospace;
+                          text-transform:uppercase;letter-spacing:.08em'>Viento</div>
+              <div style='font-family:Syne,sans-serif;font-size:1.1rem;font-weight:700;
+                          color:#E8ECF4'>{wx["wind_mph"]:.1f} mph</div>
+            </div>
+            <div style='background:#1A1E28;border-radius:6px;padding:8px 10px;text-align:center'>
+              <div style='font-size:8px;color:#7A8499;font-family:IBM Plex Mono,monospace;
+                          text-transform:uppercase;letter-spacing:.08em'>Ráfagas</div>
+              <div style='font-family:Syne,sans-serif;font-size:1.1rem;font-weight:700;
+                          color:#E8ECF4'>{wx.get("gusts_mph", 0):.1f} mph</div>
+            </div>
+            <div style='background:#1A1E28;border-radius:6px;padding:8px 10px;text-align:center'>
+              <div style='font-size:8px;color:#7A8499;font-family:IBM Plex Mono,monospace;
+                          text-transform:uppercase;letter-spacing:.08em'>Nubosidad</div>
+              <div style='font-family:Syne,sans-serif;font-size:1.1rem;font-weight:700;
+                          color:#E8ECF4'>{wx.get("cloud_pct", 0):.0f}%</div>
+            </div>
+          </div>
+          <div style='margin-top:10px;font-size:9px;color:#4A5568;font-family:IBM Plex Mono,monospace'>
+            {fecha_sel.strftime("%d %b %Y")} · {hora:02d}:00 h · {corregimiento}
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
         # Gauge chart — prob_mayor
         fig_gauge = go.Figure(go.Indicator(
@@ -518,7 +701,7 @@ with tab1:
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font_color="#E8ECF4"
         )
-        st.plotly_chart(fig_gauge, use_container_width=True)
+        st.plotly_chart(fig_gauge, width='stretch')
 
         # Mini map for selected zone
         m = folium.Map(
@@ -541,7 +724,7 @@ with tab1:
                 location=[row["Start_Lat"], row["Start_Lng"]],
                 radius=3, color=c, fill=True, fill_opacity=0.6, weight=0
             ).add_to(m)
-        st_folium(m, height=280, use_container_width=True)
+        st_folium(m, height=280, width='stretch')
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TAB 2 — MAPA DE RIESGO
@@ -578,7 +761,7 @@ with tab2:
                 tooltip=f"{row['County']} · {int(row['INEC_2024']):,} acc."
             ).add_to(m2)
 
-        st_folium(m2, height=520, use_container_width=True)
+        st_folium(m2, height=520, width='stretch')
 
     with col_legend:
         st.markdown("<div class='section-header'>Leyenda INEC 2024</div>", unsafe_allow_html=True)
@@ -632,7 +815,7 @@ with tab3:
         )
         fig_hour.update_xaxes(showgrid=False)
         fig_hour.update_yaxes(gridcolor="#252A38")
-        st.plotly_chart(fig_hour, use_container_width=True)
+        st.plotly_chart(fig_hour, width='stretch')
 
     with c2:
         st.markdown("<div class='section-header'>Severidad por estación climática</div>", unsafe_allow_html=True)
@@ -650,7 +833,7 @@ with tab3:
         )
         fig_season.update_xaxes(showgrid=False)
         fig_season.update_yaxes(gridcolor="#252A38")
-        st.plotly_chart(fig_season, use_container_width=True)
+        st.plotly_chart(fig_season, width='stretch')
 
     st.markdown("<div class='section-header'>Comparativo YoY por corregimiento — INEC 2023 vs 2024</div>", unsafe_allow_html=True)
     yoy_df = zones_df[["County","INEC_2023","INEC_2024","nivel"]].melt(
@@ -669,7 +852,7 @@ with tab3:
     )
     fig_yoy.update_xaxes(showgrid=False)
     fig_yoy.update_yaxes(gridcolor="#252A38")
-    st.plotly_chart(fig_yoy, use_container_width=True)
+    st.plotly_chart(fig_yoy, width='stretch')
 
     c3, c4 = st.columns(2, gap="medium")
     with c3:
@@ -685,12 +868,12 @@ with tab3:
         )
         fig_box.update_xaxes(showgrid=False)
         fig_box.update_yaxes(gridcolor="#252A38")
-        st.plotly_chart(fig_box, use_container_width=True)
+        st.plotly_chart(fig_box, width='stretch')
 
     with c4:
-        st.markdown("<div class='section-header'>Visibilidad vs severidad</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-header'>Nubosidad vs severidad</div>", unsafe_allow_html=True)
         fig_vis = px.violin(df.sample(1000, random_state=42),
-            x="MUTCD_Category", y="Visibility(mi)",
+            x="MUTCD_Category", y="Cloud_Cover(%)",
             color="MUTCD_Category",
             category_orders={"MUTCD_Category":["Menor","Intermedio","Mayor"]},
             color_discrete_sequence=["#3498DB","#F39C12","#E74C3C"],
@@ -701,7 +884,7 @@ with tab3:
         )
         fig_vis.update_xaxes(showgrid=False)
         fig_vis.update_yaxes(gridcolor="#252A38")
-        st.plotly_chart(fig_vis, use_container_width=True)
+        st.plotly_chart(fig_vis, width='stretch')
 
     # ── Domain shift: mortalidad por tipo y picos estacionales ─────────────
     st.markdown("<div class='section-header' style='margin-top:28px'>Mortalidad por tipo de accidente · Picos estacionales — INEC Real Panamá</div>", unsafe_allow_html=True)
@@ -745,7 +928,7 @@ with tab3:
             showlegend=False,
             template="plotly_dark"
         )
-        st.plotly_chart(fig_mort, use_container_width=True)
+        st.plotly_chart(fig_mort, width='stretch')
 
     with c6:
         st.markdown("<div class='section-header'>Accidentes fatales por mes — picos Jun · Dic</div>", unsafe_allow_html=True)
@@ -808,7 +991,7 @@ with tab3:
             showlegend=False,
             template="plotly_dark"
         )
-        st.plotly_chart(fig_picos, use_container_width=True)
+        st.plotly_chart(fig_picos, width='stretch')
 
     # ── Domain shift callout ───────────────────────────────────────────────
     st.markdown("""
@@ -895,7 +1078,7 @@ with tab4:
     )
     fig_act.update_xaxes(showgrid=True, gridcolor="#252A38")
     fig_act.update_yaxes(showgrid=True, gridcolor="#252A38")
-    st.plotly_chart(fig_act, use_container_width=True)
+    st.plotly_chart(fig_act, width='stretch')
 
     st.markdown("""
     <div style='background:#13161D;border:1px solid #252A38;border-radius:8px;padding:16px 20px;margin-top:12px'>
