@@ -1,6 +1,6 @@
 # RiskMap PA — Sistema Predictivo de Accidentes de Tránsito
 
-Dashboard comercial en Streamlit construido sobre datos calibrados INEC 2023-2024 + FEDPA. 
+Dashboard comercial en Streamlit construido sobre datos calibrados INEC 2023-2024 + Aseguradora Panameña. 
 Utiliza modelo predictivo preentrenado (Random Forest + Poisson) exportado desde `proyecto_final.ipynb`.
 
 ## Archivos requeridos
@@ -101,7 +101,7 @@ gcloud run deploy riskmap-pa \
 
 - **INEC 2024**: 23,235 accidentes / 25 corregimientos / Distrito de Panamá
 - **INEC 2023**: 21,801 accidentes (YoY +6.6%)
-- **FEDPA**: 517 reclamos reales deidentificados (broker panameño)
+- **Aseguradora Panameña**: 517 reclamos reales deidentificados (broker panameño)
 - **Base del modelo**: Florida Accidents Dataset (US_Accidents_FL.csv)
 
 ## Personalización

@@ -1,4 +1,4 @@
-# Modelo Predictivo de Accidentes Automovilísticos
+# Modelo Predictivo de Ocurrencia y Nivel de Severidad de Accidentes Automovilísticos
 
 <div align="center">
 
@@ -17,7 +17,7 @@ Maestría en Analítica de Datos — Proyectos Integradores I, II y III · 2026
 
 ## Descripción del Proyecto
 
-Este repositorio contiene el desarrollo de un **modelo predictivo de accidentes automovilísticos** utilizando el dataset **US Accidents**, filtrado para el **estado de Florida** como proxy de las condiciones de tráfico en Panamá. El proyecto abarca tres fases académicas secuenciales:
+Este repositorio contiene el desarrollo de un **Modelo Predictivo de Ocurrencia y Nivel de Severidad de Accidentes Automovilísticos** utilizando el dataset **US Accidents**, filtrado para el **estado de Florida** como proxy de las condiciones de tráfico en Panamá. El proyecto abarca tres fases académicas secuenciales:
 
 | Fase | Materia | Enfoque |
 |------|---------|---------|
@@ -48,33 +48,39 @@ final_project/
 ├── .gitignore
 ├── README.md
 └── notebooks/
-    ├── data/                                       # Datos de entrada (origen: Kaggle)
-    │   ├── US_Accidents_FL.csv                     # Dataset filtrado (Florida)
-    │   └── US_Accidents_encoded.csv                # Dataset procesado y codificado
-    ├── output/                                     # Artefactos generados por el pipeline
-    │   ├── charts/                                 # Gráficos exportados por los notebooks
-    │   └── data/                                   # CSVs y JSON generados
-    │       ├── panama_synthetic_accidents.csv      # Dataset base calibrado con INEC 2023-2024
+    ├── data/                                           # Datos de entrada (origen: Kaggle)
+    │   ├── US_Accidents_FL.csv                         # Dataset filtrado (Florida, ~270K registros)
+    │   └── US_Accidents_encoded.csv                    # Dataset procesado y codificado
+    ├── output/                                         # Artefactos generados por el pipeline
+    │   ├── charts/                                     # Gráficos exportados por los notebooks
+    │   └── data/                                       # CSVs y JSON generados
+    │       ├── panama_synthetic_accidents.csv          # Dataset base calibrado con INEC 2023-2024
     │       ├── panama_synthetic_accidents_weather.csv  # Dataset enriquecido con ERA5 (Open-Meteo)
-    │       ├── panama_severity_dist.json           # Distribución de severidad INEC (priors actuariales)
-    │       └── inec_hour_dow_joint.csv             # Distribución conjunta hora-día (INEC 2024)
-    ├── proyecto_integrador_1/                      # PROYECTO INTEGRADOR I
-    │   ├── 01.download_dataset.ipynb               # Descarga del dataset vía KaggleHub
-    │   ├── 02.EDA.ipynb                            # Análisis exploratorio inicial (Pandas)
-    │   ├── 02.DASK_EDA.ipynb                       # EDA con Dask (escalabilidad big data)
-    │   └── 03.EDA_FL.ipynb                         # EDA específico para Florida
-    ├── proyecto_integrador_2/                      # PROYECTO INTEGRADOR II
-    │   └── 04.EDA_FL_v2.ipynb                      # EDA avanzado + modelos predictivos
-    └── proyecto_integrador_3/                      # PROYECTO INTEGRADOR III (ACTUAL)
-        ├── proyecto_final.ipynb                    # Entrenamiento del modelo final (Colab)
+    │       ├── panama_synthetic_accidents_weather_v4.csv  # Versión v4 del dataset meteorológico
+    │       ├── panama_severity_dist.json               # Distribución de severidad INEC (priors actuariales)
+    │       ├── inec_hour_dow_joint.csv                 # Distribución conjunta hora-día (INEC 2024)
+    │       └── inec_road_dist.json                     # Distribución de riesgo por tipo de vía (INEC)
+    ├── proyecto_integrador_1/                          # PROYECTO INTEGRADOR I
+    │   ├── 01.download_dataset.ipynb                   # Descarga del dataset vía KaggleHub
+    │   ├── 02.EDA.ipynb                                # Análisis exploratorio inicial (Pandas)
+    │   ├── 02.DASK_EDA.ipynb                           # EDA con Dask (escalabilidad big data)
+    │   └── 03.EDA_FL.ipynb                             # EDA específico para Florida
+    ├── proyecto_integrador_2/                          # PROYECTO INTEGRADOR II
+    │   ├── 04.EDA_FL_v2.ipynb                          # EDA avanzado + modelos predictivos
+    │   └── 04.EDA_FL_v2.1.ipynb                        # Versión refinada con correcciones y mejoras
+    └── proyecto_integrador_3/                          # PROYECTO INTEGRADOR III (ACTUAL)
+        ├── proyecto_final.ipynb                        # Entrenamiento del modelo final (Colab)
+        ├── validacion_capas_sintetico.ipynb            # Validación del dataset sintético por capas
         ├── utils/
-        │   └── weather_enrichment.py               # Enriquecimiento de datos con Open-Meteo
-        └── dashboard/                              # Dashboard comercial RiskMap PA
-            ├── app.py                              # Aplicación Streamlit principal
-            ├── model.py                            # Definición standalone de AccidentPredictionSystem
-            ├── requirements.txt                    # Dependencias del dashboard
-            ├── smoke_test.py                       # Tests de humo para validar el pipeline
-            └── accident_prediction_system.joblib   # Modelo preentrenado (joblib)
+        │   ├── weather_enrichment.py                   # Enriquecimiento de datos con Open-Meteo
+        │   └── weather_checkpoint.csv                  # Checkpoint de progreso del enriquecimiento
+        └── dashboard/                                  # Dashboard comercial RiskMap PA
+            ├── app.py                                  # Aplicación Streamlit principal
+            ├── model.py                                # Definición standalone de AccidentPredictionSystem
+            ├── requirements.txt                        # Dependencias del dashboard
+            ├── smoke_test.py                           # Tests de humo para validar el pipeline
+            ├── weather_checkpoint.csv                  # Caché de condiciones meteorológicas
+            └── accident_prediction_system.joblib       # Modelo preentrenado (~6.2 GB, joblib)
 ```
 
 ---
@@ -116,6 +122,9 @@ El notebook central del proyecto. Integra análisis avanzado y modelado en un fl
 - **Etapa 2 — Severidad**: Clasificación `Low / Moderate / High` con Random Forest, Extra Trees y XGBoost (validación cruzada 5-fold + comparación de modelos)
 - Visualizaciones interactivas con Plotly
 
+#### [`04.EDA_FL_v2.1.ipynb`](notebooks/proyecto_integrador_2/04.EDA_FL_v2.1.ipynb) — Análisis Complementario
+Análisis adicional elaborado a partir de consultas del profesor para profundizar en el impacto de features específicos sobre la severidad y actualizar gráficas ya entregadas en el Proyecto Integrador II.
+
 ### Variables Clave
 
 | Categoría | Variables |
@@ -132,7 +141,7 @@ El notebook central del proyecto. Integra análisis avanzado y modelado en un fl
 
 ### Descripción
 
-**RiskMap PA** es un dashboard comercial en Streamlit que presenta el modelo predictivo calibrado con datos reales panameños (INEC 2023-2024 + FEDPA). Está orientado a una audiencia de seguros/actuarial y permite evaluar el riesgo de accidentalidad por corregimiento del Distrito de Panamá en tiempo real.
+**RiskMap PA** es un dashboard comercial en Streamlit que presenta el modelo predictivo calibrado con datos reales panameños (INEC 2023-2024 + Aseguradora Panameña). Está orientado a una audiencia de seguros/actuarial y permite evaluar el riesgo de accidentalidad por corregimiento del Distrito de Panamá en tiempo real.
 
 ### Archivos
 
@@ -140,6 +149,18 @@ El notebook central del proyecto. Integra análisis avanzado y modelado en un fl
 Notebook de entrenamiento del modelo final (diseñado para ejecutarse en Google Colab).
 - Entrena el pipeline completo: preprocessing + Random Forest calibrado + modelo Poisson
 - Exporta `accident_prediction_system.joblib` para uso en el dashboard
+
+**Métricas del modelo entrenado (test set, n=617,735):**
+
+| Métrica | Valor |
+|---------|-------|
+| Accuracy | 60.9% |
+| ROC AUC (weighted) | 0.794 |
+| AUC clase Mayor | 0.836 |
+| Gini | 0.671 |
+
+#### [`validacion_capas_sintetico.ipynb`](notebooks/proyecto_integrador_3/validacion_capas_sintetico.ipynb)
+Notebook de validación del dataset sintético de Panamá. Verifica la coherencia estadística del proceso de calibración por capas (INEC, ERA5, MUTCD) antes de alimentar el modelo y el dashboard.
 
 #### [`utils/weather_enrichment.py`](notebooks/proyecto_integrador_3/utils/weather_enrichment.py)
 Módulo de enriquecimiento meteorológico que consume la API **Open-Meteo** para asociar condiciones climáticas históricas (temperatura, precipitación, visibilidad) a cada registro del dataset sintético de Panamá.
@@ -152,10 +173,10 @@ Aplicación Streamlit principal con cinco pestañas:
 
 | Pestaña | Contenido |
 |---------|-----------|
+| EDA · Florida | Análisis exploratorio del dataset de entrenamiento (FL): severidad, patrones temporales, clima e infraestructura que motivaron las features del modelo |
 | Mapa de Riesgo | Mapa de calor a nivel de corregimiento con datos INEC 2024 |
 | Perfil de Siniestralidad | Distribución horaria, estacional, YoY INEC 2023 vs 2024 |
-| EDA · Florida | Análisis exploratorio del dataset de entrenamiento (FL): severidad, patrones temporales, clima e infraestructura que motivaron las features del modelo |
-| Predictor | Predicción en tiempo real (severidad MUTCD + probabilidades calibradas INEC + índice de prima técnica relativa) |
+| Predictor | Predicción en tiempo real con condiciones meteorológicas automáticas (forecast Open-Meteo en tiempo real o climatología ERA5 como fallback); muestra severidad MUTCD, probabilidades calibradas INEC e índice de prima técnica relativa |
 | Actuarial | Tabla y scatter de índice de prima técnica relativa por corregimiento (ver detalle abajo) |
 
 #### Pestaña Actuarial — detalle de cálculos
@@ -191,7 +212,7 @@ El índice es adimensional y relativo: la zona de menor riesgo compuesto vale `1
 | Betania | 1,240 | 1.33 | 14.1% | +5.0% | 1.33 × 0.141 × 1.050 = **0.1970** |
 | Chilibre | 180 | 0.19 | 11.8% | +1.1% | 0.19 × 0.118 × 1.011 = **0.0227** |
 
-El mínimo del producto crudo entre todas las zonas es el de Chilibre: `0.0227`.
+En el ejemplo, el mínimo del producto crudo entre todas las zonas es el de Chilibre: `0.0227`.
 
 ```
 índice_prima(Bella Vista) = 0.6200 / 0.0227 = 27.3×
@@ -208,7 +229,7 @@ Eje X = accidentes INEC 2024 (frecuencia observada), eje Y = P(Mayor) del modelo
 - **Baja frecuencia + alta severidad** → riesgo catastrófico puntual (punto grande, arriba a la izquierda)
 
 **Conexión con el modelo de dos etapas:**  
-La prima técnica completa requeriría `E[Frecuencia] × P(Mayor) × E[Costo siniestro] × (1 + loading)`. El índice usa `E[Frecuencia]` aproximado por el peso INEC (datos reales), `P(Mayor)` del Random Forest calibrado, y el factor YoY como proxy del loading de tendencia. El término `E[Costo siniestro]` está pendiente de datos reales de liquidación (fuente sugerida: FEDPA).
+La prima técnica completa requeriría `E[Frecuencia] × P(Mayor) × E[Costo siniestro] × (1 + loading)`. El índice usa `E[Frecuencia]` aproximado por el peso INEC (datos reales), `P(Mayor)` del Random Forest calibrado, y el factor YoY como proxy del loading de tendencia. El término `E[Costo siniestro]` está pendiente de datos reales de liquidación (fuente sugerida: Aseguradora Panameña).
 
 ---
 
@@ -224,10 +245,10 @@ Tests de humo para validar que el pipeline de carga del modelo y las prediccione
 |--------|---------|
 | INEC 2024 | 23,235 accidentes / 25 corregimientos / Distrito de Panamá |
 | INEC 2023 | 21,801 accidentes (YoY +6.6%) |
-| INEC Vías | Distribución de riesgo por vía (micro-segmentación) y tipo de carretera |
-| FEDPA | 517 reclamos reales deidentificados (broker panameño) |
+| INEC Vías | Distribución de riesgo por vía (micro-segmentación) y tipo de carretera → `inec_road_dist.json` |
+| Aseguradora Panameña | 517 reclamos reales deidentificados (broker panameño) |
 | Base del modelo | Florida Accidents Dataset (US_Accidents_FL.csv) |
-| Open-Meteo API | Datos meteorológicos históricos para enriquecimiento del dataset |
+| Open-Meteo API | Datos meteorológicos históricos (enriquecimiento offline) y pronóstico en tiempo real (predictor del dashboard) |
 
 ### Micro-segmentación de Riesgo
 
@@ -246,7 +267,7 @@ streamlit run app.py
 
 Abre en: http://localhost:8501
 
-> **Nota**: El archivo `accident_prediction_system.joblib` (~6.2 GB) **no está incluido** en el repositorio por su tamaño. Ejecútalo desde `proyecto_final.ipynb` en Colab o solicítalo al equipo.
+> **Nota**: El archivo `accident_prediction_system.joblib` (~6.2 GB) **está incluido** en el repositorio pero **no se sincroniza con GitHub** por su tamaño (supera el límite de 100 MB por archivo de Git). Si no está disponible localmente, ejecútalo desde `proyecto_final.ipynb` en Colab o solicítalo al equipo.
 
 ### Consideraciones para despliegue en la nube
 

@@ -1532,7 +1532,7 @@ with tab_actuarial:
         <b>Prima técnica</b> = E[Frecuencia] × P(Mayor | siniestro) × E[Costo siniestro] × (1 + loading)<br>
         <b>Índice relativo</b> = (E[Freq_Poisson] × P(Mayor) × (1 + YoY)) / min(mismo producto)<br>
         <b>Calibración</b>: predicciones FL ajustadas con peso INEC por corregimiento<br>
-        <span style='color:#7A8499'>Pendiente: dataset de montos reales para calibrar E[Costo]. Fuente sugerida: FEDPA con campos de liquidación.</span>
+        <span style='color:#7A8499'>Pendiente: dataset de montos reales para calibrar E[Costo]. Fuente sugerida: Aseguradora Panameña con campos de liquidación.</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
