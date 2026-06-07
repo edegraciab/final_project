@@ -1,6 +1,6 @@
 """
 Sistema Predictivo de Accidentes — Demo Comercial Panamá
-Calibrado con INEC 2023-2024 + FEDPA broker data
+Calibrado con INEC 2023-2024 + Reclamos_Aseguradora
 """
 
 import streamlit as st
@@ -387,7 +387,7 @@ with st.sidebar:
     </div>
     <div style='font-size:9px;color:#4A5568;font-family:IBM Plex Mono,monospace;line-height:1.6'>
       Train: US Accidents FL 2016–23<br>
-      Cal: INEC 2023–2024 · FEDPA<br>
+      Cal: INEC 2023–2024 · Reclamos_Aseguradora<br>
       CV: 5-fold · n=617,735
     </div>
     """, unsafe_allow_html=True)
@@ -656,12 +656,25 @@ with tab_predictor:
 
         prima_idx = float(zone_row_dyn["prima_index_dyn"])
         yoy_pct   = float(zone_row_dyn["YoY"]) * 100
+        
+        # Variables para desglose del índice
+        _prima_bruta   = freq_pred * float(zone_row_dyn["p_mayor"]) * (1 + float(zone_row_dyn["YoY"]))
+        _zona_min      = zones_dynamic.loc[zones_dynamic["prima_index_dyn"] == zones_dynamic["prima_index_dyn"].min(), "County"].values[0]
+
         st.markdown(f"""
         <div class='pred-card' style='margin-top:12px;background:#13161D'>
           <div class='pred-label'>Índice de prima técnica relativa</div>
           <div class='pred-value' style='color:#F39C12'>{prima_idx:.2f}×</div>
           <div style='font-size:11px;color:#7A8499;margin-top:4px'>
             Crecimiento YoY zona: <span style='color:{"#E74C3C" if yoy_pct>0 else "#2ECC71"}'>{yoy_pct:+.1f}%</span>
+          </div>
+          <div style='font-size:10px;color:#4A5568;font-family:IBM Plex Mono,monospace;margin-top:8px;line-height:1.8'>
+            {freq_pred:.2f} acc/h
+            &times; {float(zone_row_dyn["p_mayor"])*100:.2f}% P(Mayor)
+            &times; (1 + {yoy_pct:+.1f}% YoY)
+            = {_prima_bruta:.4f} bruto<br>
+            &divide; min distrito ({_zona_min})
+            &rarr; <span style='color:#F39C12'>{prima_idx:.2f}&times;</span>
           </div>
         </div>
         """, unsafe_allow_html=True)
