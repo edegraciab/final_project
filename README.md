@@ -43,44 +43,44 @@ Florida fue seleccionado como estado de referencia por su **similitud estructura
 
 ## Estructura del Repositorio
 
-```
-final_project/
-├── .gitignore
-├── README.md
-└── notebooks/
-    ├── data/                                           # Datos de entrada (origen: Kaggle)
-    │   ├── US_Accidents_FL.csv                         # Dataset filtrado (Florida, ~270K registros)
-    │   └── US_Accidents_encoded.csv                    # Dataset procesado y codificado
-    ├── output/                                         # Artefactos generados por el pipeline
-    │   ├── charts/                                     # Gráficos exportados por los notebooks
-    │   └── data/                                       # CSVs y JSON generados
-    │       ├── panama_synthetic_accidents.csv          # Dataset base calibrado con INEC 2023-2024
-    │       ├── panama_synthetic_accidents_weather.csv  # Dataset enriquecido con ERA5 (Open-Meteo)
-    │       ├── panama_synthetic_accidents_weather_v4.csv  # Versión v4 del dataset meteorológico
-    │       ├── panama_severity_dist.json               # Distribución de severidad INEC (priors actuariales)
-    │       ├── inec_hour_dow_joint.csv                 # Distribución conjunta hora-día (INEC 2024)
-    │       └── inec_road_dist.json                     # Distribución de riesgo por tipo de vía (INEC)
-    ├── proyecto_integrador_1/                          # PROYECTO INTEGRADOR I
-    │   ├── 01.download_dataset.ipynb                   # Descarga del dataset vía KaggleHub
-    │   ├── 02.EDA.ipynb                                # Análisis exploratorio inicial (Pandas)
-    │   ├── 02.DASK_EDA.ipynb                           # EDA con Dask (escalabilidad big data)
-    │   └── 03.EDA_FL.ipynb                             # EDA específico para Florida
-    ├── proyecto_integrador_2/                          # PROYECTO INTEGRADOR II
-    │   ├── 04.EDA_FL_v2.ipynb                          # EDA avanzado + modelos predictivos
-    │   └── 04.EDA_FL_v2.1.ipynb                        # Versión refinada con correcciones y mejoras
-    └── proyecto_integrador_3/                          # PROYECTO INTEGRADOR III (ACTUAL)
-        ├── proyecto_final.ipynb                        # Entrenamiento del modelo final (Colab)
-        ├── validacion_capas_sintetico.ipynb            # Validación del dataset sintético por capas
-        ├── utils/
-        │   ├── weather_enrichment.py                   # Enriquecimiento de datos con Open-Meteo
-        │   └── weather_checkpoint.csv                  # Checkpoint de progreso del enriquecimiento
-        └── dashboard/                                  # Dashboard comercial RiskMap PA
-            ├── app.py                                  # Aplicación Streamlit principal
-            ├── model.py                                # Definición standalone de AccidentPredictionSystem
-            ├── requirements.txt                        # Dependencias del dashboard
-            ├── smoke_test.py                           # Tests de humo para validar el pipeline
-            ├── weather_checkpoint.csv                  # Caché de condiciones meteorológicas
-            └── accident_prediction_system.joblib       # Modelo preentrenado (~6.2 GB, joblib)
+```diff
+ final_project/
+ ├── .gitignore
+ ├── README.md
+ └── notebooks/
+     ├── data/                                           # Datos de entrada (origen: Kaggle)
+     │   ├── US_Accidents_FL.csv                         # Dataset filtrado (Florida, ~270K registros)
+     │   └── US_Accidents_encoded.csv                    # Dataset procesado y codificado
+     ├── output/                                         # Artefactos generados por el pipeline
+     │   ├── charts/                                     # Gráficos exportados por los notebooks
+     │   └── data/                                       # CSVs y JSON generados
+     │       ├── panama_synthetic_accidents.csv          # Dataset base calibrado con INEC 2023-2024
+     │       ├── panama_synthetic_accidents_weather.csv  # Dataset enriquecido con ERA5 (Open-Meteo)
+     │       ├── panama_synthetic_accidents_weather_v4.csv  # Versión v4 del dataset meteorológico
+     │       ├── panama_severity_dist.json               # Distribución de severidad INEC (priors actuariales)
+     │       ├── inec_hour_dow_joint.csv                 # Distribución conjunta hora-día (INEC 2024)
+     │       └── inec_road_dist.json                     # Distribución de riesgo por tipo de vía (INEC)
+     ├── proyecto_integrador_1/                          # PROYECTO INTEGRADOR I
+     │   ├── 01.download_dataset.ipynb                   # Descarga del dataset vía KaggleHub
+     │   ├── 02.EDA.ipynb                                # Análisis exploratorio inicial (Pandas)
+     │   ├── 02.DASK_EDA.ipynb                           # EDA con Dask (escalabilidad big data)
+     │   └── 03.EDA_FL.ipynb                             # EDA específico para Florida
+     ├── proyecto_integrador_2/                          # PROYECTO INTEGRADOR II
+     │   ├── 04.EDA_FL_v2.ipynb                          # EDA avanzado + modelos predictivos
+     │   └── 04.EDA_FL_v2.1.ipynb                        # Versión refinada con correcciones y mejoras
++    └── proyecto_integrador_3/                          # PROYECTO INTEGRADOR III (ACTUAL)
+         ├── proyecto_final.ipynb                        # Entrenamiento del modelo final (Colab)
+         ├── validacion_capas_sintetico.ipynb            # Validación del dataset sintético por capas
+         ├── utils/
+         │   ├── weather_enrichment.py                   # Enriquecimiento de datos con Open-Meteo
+         │   └── weather_checkpoint.csv                  # Checkpoint de progreso del enriquecimiento
+         └── dashboard/                                  # Dashboard comercial RiskMap PA
+             ├── app.py                                  # Aplicación Streamlit principal
+             ├── model.py                                # Definición standalone de AccidentPredictionSystem
+             ├── requirements.txt                        # Dependencias del dashboard
+             ├── smoke_test.py                           # Tests de humo para validar el pipeline
+             ├── weather_checkpoint.csv                  # Caché de condiciones meteorológicas
+             └── accident_prediction_system.joblib       # Modelo preentrenado (~6.2 GB, joblib)
 ```
 
 ---

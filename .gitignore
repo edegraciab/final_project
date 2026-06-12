@@ -57,6 +57,10 @@ Thumbs.db
 .DS_Store
 
 *.csv
+# Excepciones: CSVs de calibración Panamá que sí deben publicarse
+!notebooks/output/data/panama_synthetic_accidents.csv
+!notebooks/output/data/panama_synthetic_accidents_weather.csv
+!notebooks/output/data/inec_hour_dow_joint.csv
 .openmeteo_cache/
 .openmeteo_cache_test/
 weather_checkpoint.csv
