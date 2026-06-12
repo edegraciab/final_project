@@ -47,18 +47,17 @@ Florida fue seleccionado como estado de referencia por su **similitud estructura
  final_project/
  ├── .gitignore
  ├── README.md
+ ├── docs/
+ │   └── flujo-decisiones-articulo.md                   # Diagrama Mermaid del pipeline FL→PA (5 capas INEC)
  └── notebooks/
      ├── data/                                           # Datos de entrada (origen: Kaggle)
-     │   ├── US_Accidents_FL.csv                         # Dataset filtrado (Florida, ~270K registros)
-     │   └── US_Accidents_encoded.csv                    # Dataset procesado y codificado
-     ├── output/                                         # Artefactos generados por el pipeline
-     │   ├── charts/                                     # Gráficos exportados por los notebooks
-     │   └── data/                                       # CSVs y JSON generados
-     │       ├── panama_synthetic_accidents.csv          # Dataset base calibrado con INEC 2023-2024
-     │       ├── panama_synthetic_accidents_weather.csv  # Dataset enriquecido con ERA5 (Open-Meteo)
-     │       ├── panama_synthetic_accidents_weather_v4.csv  # Versión v4 del dataset meteorológico
+     │   └── US_Accidents_FL.csv                         # Dataset filtrado (Florida, ~270K registros)
+     ├── output/
+     │   └── data/                                       # CSVs y JSON generados — incluidos en el repo
+     │       ├── panama_synthetic_accidents.csv          # Dataset sintético base calibrado INEC 2023-2024 ✓
+     │       ├── panama_synthetic_accidents_weather.csv  # Dataset enriquecido con ERA5 (Open-Meteo) ✓
      │       ├── panama_severity_dist.json               # Distribución de severidad INEC (priors actuariales)
-     │       ├── inec_hour_dow_joint.csv                 # Distribución conjunta hora-día (INEC 2024)
+     │       ├── inec_hour_dow_joint.csv                 # Distribución conjunta hora-día (INEC 2024) ✓
      │       └── inec_road_dist.json                     # Distribución de riesgo por tipo de vía (INEC)
      ├── proyecto_integrador_1/                          # PROYECTO INTEGRADOR I
      │   ├── 01.download_dataset.ipynb                   # Descarga del dataset vía KaggleHub
@@ -72,7 +71,7 @@ Florida fue seleccionado como estado de referencia por su **similitud estructura
          ├── proyecto_final.ipynb                        # Entrenamiento del modelo final (Colab)
          ├── validacion_capas_sintetico.ipynb            # Validación del dataset sintético por capas
          ├── utils/
-         │   ├── weather_enrichment.py                   # Enriquecimiento de datos con Open-Meteo
+         │   ├── weather_enrichment.py                   # Enriquecimiento meteorológico con Open-Meteo
          │   └── weather_checkpoint.csv                  # Checkpoint de progreso del enriquecimiento
          └── dashboard/                                  # Dashboard comercial RiskMap PA
              ├── app.py                                  # Aplicación Streamlit principal
@@ -82,6 +81,7 @@ Florida fue seleccionado como estado de referencia por su **similitud estructura
              ├── weather_checkpoint.csv                  # Caché de condiciones meteorológicas
              └── accident_prediction_system.joblib       # Modelo preentrenado (~6.2 GB, joblib)
 ```
+
 
 ---
 
@@ -239,6 +239,26 @@ Definición standalone de `AccidentPredictionSystem` — necesaria para deserial
 #### [`dashboard/smoke_test.py`](notebooks/proyecto_integrador_3/dashboard/smoke_test.py)
 Tests de humo para validar que el pipeline de carga del modelo y las predicciones de muestra producen salidas coherentes antes del despliegue.
 
+#### [`dashboard/README.md`](notebooks/proyecto_integrador_3/dashboard/README.md)
+Guía autónoma del dashboard: estructura del modelo `.joblib`, instrucciones de despliegue (local, Streamlit Cloud, Google Cloud Run), flujo de predicción y solución de problemas comunes.
+
+---
+
+### Documentación Metodológica
+
+#### [`docs/flujo-decisiones-articulo.md`](docs/flujo-decisiones-articulo.md)
+Diagrama Mermaid que mapea el **pipeline completo de calibración FL → PA** en cinco capas secuenciales:
+
+| Capa | Fuente | Output |
+|------|--------|--------|
+| 1 · Frecuencia territorial | INEC 2023-2024 + Reclamos Aseguradora | `INEC_weight` por corregimiento, YoY, índice prima |
+| 2 · Distribución horaria | CSVs INEC hora 2023-2024 | `inec_hour_probs.csv` — distribución real por zona |
+| 3 · Interacción hora × día | CSVs INEC hora-día 2023-2024 | `inec_hour_dow_joint.csv` — matriz conjunta P(hora, día) |
+| 4 · Severidad real panameña | CSVs INEC fatales/víctimas 2023-2024 | `panama_severity_dist.json` — Menor 75.8% / Intermedio 23.9% / Mayor 0.3% |
+| 5 · Vía y tipo de carretera | CSVs INEC accidentes por vía 2024 | `inec_road_dist.json` — 271 vías, 5 tipos de carretera |
+
+El diagrama incluye una nota metodológica sobre el uso de Claude como copiloto estadístico en la construcción del dataset sintético.
+
 ### Fuentes de Calibración (Fase III)
 
 | Fuente | Detalle |
@@ -374,7 +394,7 @@ Proyecto Integrador III:
   streamlit run dashboard/app.py  →  lee   notebooks/output/data/
 ```
 
-> **Nota**: Los archivos CSV del dataset y el modelo `.joblib` **no están incluidos** en el repositorio por su tamaño. Ejecuta `01.download_dataset.ipynb` primero para generarlos.
+> **Nota**: El dataset de entrada (`US_Accidents_FL.csv`) y el modelo `.joblib` **no están incluidos** en el repositorio por su tamaño. Ejecuta `01.download_dataset.ipynb` primero para generar el dataset de Florida. Los CSVs de calibración Panamá (`panama_synthetic_accidents.csv`, `panama_synthetic_accidents_weather.csv`, `inec_hour_dow_joint.csv`) **sí están versionados** en `notebooks/output/data/`.
 
 ---
 
