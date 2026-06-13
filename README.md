@@ -15,6 +15,16 @@ Maestría en Analítica de Datos — Proyectos Integradores I, II y III · 2026
 
 ---
 
+<div align="center">
+
+![RiskMap PA — Dashboard Preview](docs/riskmap-pa-dashboard-preview.png)
+
+*RiskMap PA · Dashboard comercial de predicción de accidentalidad — Distrito de Panamá*
+
+</div>
+
+---
+
 ## Descripción del Proyecto
 
 Este repositorio contiene el desarrollo de un **Modelo Predictivo de Ocurrencia y Nivel de Severidad de Accidentes Automovilísticos** utilizando el dataset **US Accidents**, filtrado para el **estado de Florida** como proxy de las condiciones de tráfico en Panamá. El proyecto abarca tres fases académicas secuenciales:
